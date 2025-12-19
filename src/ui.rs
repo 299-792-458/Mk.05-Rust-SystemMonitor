@@ -148,9 +148,18 @@ fn draw_bottom_section(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // 1. Process List (Top 5)
-    let header_cells = ["PID", "Name", "CPU%", "MEM(MB)"]
-        .iter()
-        .map(|h| ratatui::widgets::Cell::from(*h).style(Style::default().fg(C_BG).bg(C_ACCENT).add_modifier(Modifier::BOLD)));
+    let (cpu_h, mem_h) = if app.process_sort_by_cpu {
+        ("CPU% ▼", "MEM")
+    } else {
+        ("CPU%", "MEM ▼")
+    };
+
+    let header_cells = vec![
+        ratatui::widgets::Cell::from("PID").style(Style::default().fg(C_BG).bg(C_ACCENT).add_modifier(Modifier::BOLD)),
+        ratatui::widgets::Cell::from("Name").style(Style::default().fg(C_BG).bg(C_ACCENT).add_modifier(Modifier::BOLD)),
+        ratatui::widgets::Cell::from(cpu_h).style(Style::default().fg(C_BG).bg(C_ACCENT).add_modifier(Modifier::BOLD)),
+        ratatui::widgets::Cell::from(mem_h).style(Style::default().fg(C_BG).bg(C_ACCENT).add_modifier(Modifier::BOLD)),
+    ];
     let header = Row::new(header_cells).height(1).bottom_margin(0);
     
     // LIMIT TO TOP 5
