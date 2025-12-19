@@ -1,14 +1,13 @@
 use ratatui::{
-    backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{Block, Borders, BorderType, Gauge, Paragraph, Sparkline, Wrap},
+    text::{Span, Line},
+    widgets::{Block, Borders, BorderType, Gauge, Paragraph, Sparkline},
     Frame,
 };
 use crate::app::App;
 
-pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
+pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -16,15 +15,15 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
             Constraint::Min(10),    // Main Content
             Constraint::Length(3),  // Footer
         ].as_ref())
-        .split(f.size());
+        .split(f.area());
 
     draw_header(f, app, chunks[0]);
     draw_body(f, app, chunks[1]);
     draw_footer(f, app, chunks[2]);
 }
 
-fn draw_header<B: Backend>(f: &mut Frame<B>, _app: &App, area: Rect) {
-    let text = Spans::from(vec![
+fn draw_header(f: &mut Frame, _app: &App, area: Rect) {
+    let text = Line::from(vec![
         Span::styled("OMNI-MONITOR", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw(" | "),
         Span::styled("v1.0.0", Style::default().fg(Color::DarkGray)),
@@ -45,7 +44,7 @@ fn draw_header<B: Backend>(f: &mut Frame<B>, _app: &App, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn draw_body<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+fn draw_body(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -58,7 +57,7 @@ fn draw_body<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     draw_memory(f, app, chunks[1]);
 }
 
-fn draw_cpu<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+fn draw_cpu(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -77,13 +76,11 @@ fn draw_cpu<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     f.render_widget(gauge, chunks[0]);
 
     // 2. CPU Sparklines (Per Core - showing only first 4 for demo or aggregated)
-    // For a portfolio, showing individual core activity is cooler.
-    // Let's create a block for Sparkline
     let block = Block::default().title(" CPU Real-time Activity (1ms sampling) ").borders(Borders::ALL).border_type(BorderType::Rounded);
     f.render_widget(block, chunks[1]);
 
-    // Determine how many cores to show based on height
-    let inner_area = chunks[1].inner(&ratatui::layout::Margin { vertical: 1, horizontal: 1 });
+    // Use a slight margin
+    let inner_area = chunks[1].inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
     
     if !app.cpu_history.is_empty() {
         // Show Core 0 as representative or Sum
@@ -98,7 +95,7 @@ fn draw_cpu<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     }
 }
 
-fn draw_memory<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -128,8 +125,8 @@ fn draw_memory<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     }
 }
 
-fn draw_footer<B: Backend>(f: &mut Frame<B>, _app: &App, area: Rect) {
-    let text = Spans::from(vec![
+fn draw_footer(f: &mut Frame, _app: &App, area: Rect) {
+    let text = Line::from(vec![
         Span::styled("Q", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Span::raw(" to Quit | "),
         Span::styled("Sampling: 1ms", Style::default().fg(Color::Green)),
