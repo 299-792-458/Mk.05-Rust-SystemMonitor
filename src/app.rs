@@ -1,63 +1,71 @@
 use std::collections::VecDeque;
-use crate::monitor::SystemStats;
+use crate::monitor::{SystemStats, ProcessInfo};
 
 pub struct App {
     pub should_quit: bool,
-    pub cpu_history: Vec<VecDeque<u64>>, // Core -> History (0-100 integer for simple TUI)
-    pub ram_history: VecDeque<u64>,
+    // History for Charts (X: Time/Tick, Y: Value)
+    pub cpu_history_total: VecDeque<(f64, f64)>, 
+    pub ram_history: VecDeque<(f64, f64)>,
+    pub net_rx_history: VecDeque<(f64, f64)>,
+    pub net_tx_history: VecDeque<(f64, f64)>,
+    
+    pub processes: Vec<ProcessInfo>,
+    pub disks: Vec<(String, u64, u64)>,
+    pub temps: Vec<(String, f32)>,
+    
     pub max_history_len: usize,
     pub last_stats: Option<SystemStats>,
-    pub avg_cpu_1s: f32, // Average over 1 second (1000 samples approx)
-    cpu_accumulator: VecDeque<f32>,
+    
+    // X-Axis counter for charts
+    pub tick_count: f64,
 }
 
 impl App {
     pub fn new(max_history: usize) -> Self {
         Self {
             should_quit: false,
-            cpu_history: Vec::new(),
+            cpu_history_total: VecDeque::with_capacity(max_history),
             ram_history: VecDeque::with_capacity(max_history),
+            net_rx_history: VecDeque::with_capacity(max_history),
+            net_tx_history: VecDeque::with_capacity(max_history),
+            processes: Vec::new(),
+            disks: Vec::new(),
+            temps: Vec::new(),
             max_history_len: max_history,
             last_stats: None,
-            avg_cpu_1s: 0.0,
-            cpu_accumulator: VecDeque::with_capacity(1000),
+            tick_count: 0.0,
         }
     }
 
     pub fn on_tick(&mut self, stats: SystemStats) {
-        // Initialize cpu history vectors if first run
-        if self.cpu_history.is_empty() {
-            self.cpu_history = vec![VecDeque::with_capacity(self.max_history_len); stats.cpu_usage.len()];
-        }
+        self.tick_count += 1.0;
 
-        // Update CPU History per core
-        for (i, usage) in stats.cpu_usage.iter().enumerate() {
-            if let Some(core_hist) = self.cpu_history.get_mut(i) {
-                if core_hist.len() >= self.max_history_len {
-                    core_hist.pop_front();
-                }
-                core_hist.push_back(*usage as u64);
-            }
+        // CPU Total Chart
+        if self.cpu_history_total.len() >= self.max_history_len {
+            self.cpu_history_total.pop_front();
         }
+        self.cpu_history_total.push_back((self.tick_count, stats.total_cpu_usage as f64));
 
-        // Update RAM History
+        // RAM Chart
         if self.ram_history.len() >= self.max_history_len {
             self.ram_history.pop_front();
         }
-        // Convert to MB for display or keep raw. Let's keep percentage for sparkline (0-100) relative to total?
-        // Sparkline expects u64, usually.
-        let ram_percent = (stats.ram_used as f64 / stats.ram_total as f64 * 100.0) as u64;
-        self.ram_history.push_back(ram_percent);
+        let ram_percent = (stats.ram_used as f64 / stats.ram_total as f64) * 100.0;
+        self.ram_history.push_back((self.tick_count, ram_percent));
 
-        // Calculate Average CPU (Real-time moving average over 1000 samples/1s approx)
-        if self.cpu_accumulator.len() >= 1000 {
-            self.cpu_accumulator.pop_front();
+        // Network Chart
+        if self.net_rx_history.len() >= self.max_history_len {
+            self.net_rx_history.pop_front();
+            self.net_tx_history.pop_front();
         }
-        self.cpu_accumulator.push_back(stats.total_cpu_usage);
-        
-        let sum: f32 = self.cpu_accumulator.iter().sum();
-        self.avg_cpu_1s = sum / self.cpu_accumulator.len() as f32;
+        // Convert to KB/s for better graph scale potentially, or keep raw bytes
+        self.net_rx_history.push_back((self.tick_count, stats.rx_speed as f64));
+        self.net_tx_history.push_back((self.tick_count, stats.tx_speed as f64));
 
+        // Update Snapshot Data
+        self.processes = stats.processes.clone();
+        self.disks = stats.disks.clone();
+        self.temps = stats.temperatures.clone();
         self.last_stats = Some(stats);
     }
 
