@@ -85,8 +85,6 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // 3. Process All Pending Data Events
-        // The monitor thread sends data every 1ms. The UI draws every 30ms.
-        // We must process ALL pending messages to keep the history accurate without lag.
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 MonitorEvent::Stats(stats) => {
