@@ -169,35 +169,59 @@ fn draw_bottom_section(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[1]);
 
-    // Sensors
-    let mut temp_lines = vec![];
-    if app.temps.is_empty() {
-         temp_lines.push(Line::from(Span::styled(" No Sensors Found ", Style::default().fg(C_DIM))));
-    } else {
-        for (label, temp) in &app.temps {
-            temp_lines.push(Line::from(vec![
-                Span::styled(format!("{}: ", label), Style::default().fg(C_TEXT)),
-                Span::styled(format!("{:.1}°C", temp), Style::default().fg(if *temp > 70.0 { C_CRIT } else { C_ACCENT })),
-            ]));
-        }
-    }
-    let p_temp = Paragraph::new(temp_lines)
-        .block(Block::default().title(" SENSORS ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)));
-    f.render_widget(p_temp, info_chunks[0]);
+    // Sensors Chart
+    let temp_data: Vec<(f64, f64)> = app.temp_history.iter().cloned().collect();
+    let x_min = temp_data.first().map(|x| x.0).unwrap_or(0.0);
+    let x_max = temp_data.last().map(|x| x.0).unwrap_or(0.0).max(x_min + 10.0);
 
-    // Disks
-    let mut disk_lines = vec![];
-    for (name, used, total) in &app.disks {
-        let pct = (*used as f64 / *total as f64) * 100.0;
-        let color = if pct > 90.0 { C_CRIT } else if pct > 75.0 { C_WARN } else { Color::Green };
+    let ds_temp = vec![
+        Dataset::default()
+            .name("MAX TEMP °C")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(C_WARN)) // Orange-ish default
+            .data(&temp_data),
+    ];
+    
+    let chart_temp = Chart::new(ds_temp)
+        .block(Block::default().title(" THERMAL HISTORY ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)))
+        .x_axis(Axis::default().bounds([x_min, x_max]).labels(Vec::<Span>::new()))
+        .y_axis(Axis::default().bounds([0.0, 100.0]).labels(vec![Span::raw("0"), Span::raw("100")])); // Fixed 0-100
         
-        disk_lines.push(Line::from(vec![
-            Span::styled(format!("HDD {}: ", name), Style::default().fg(C_TEXT)),
-            Span::styled(format!("{:.1}% ", pct), Style::default().fg(color)),
-            Span::styled(format!("({}/{} GB)", used/1024/1024/1024, total/1024/1024/1024), Style::default().fg(C_DIM)),
-        ]));
+    f.render_widget(chart_temp, info_chunks[0]);
+
+    // Disks (Gauges)
+    // Create a container block first
+    let disk_block = Block::default().title(" STORAGE ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM));
+    f.render_widget(disk_block.clone(), info_chunks[1]);
+    
+    // Split layout inside the block for gauges
+    let disk_area = info_chunks[1].inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
+    let disks_to_show = app.disks.len().min(3); // Show max 3 disks
+    
+    if disks_to_show > 0 {
+        let constraints = vec![Constraint::Length(2); disks_to_show]; // 2 lines per gauge
+        let disk_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(disk_area);
+
+        for (i, (name, used, total)) in app.disks.iter().take(disks_to_show).enumerate() {
+            let ratio = *used as f64 / *total as f64;
+            let pct = ratio * 100.0;
+            let color = if pct > 90.0 { C_CRIT } else if pct > 75.0 { C_WARN } else { Color::Green };
+            
+            let label = format!("{} : {:.1}%", name, pct);
+            
+            let gauge = Gauge::default()
+                .block(Block::default().borders(Borders::NONE))
+                .gauge_style(Style::default().fg(color).bg(C_DIM))
+                .ratio(ratio)
+                .label(label);
+                
+            f.render_widget(gauge, disk_layout[i]);
+        }
+    } else {
+        f.render_widget(Paragraph::new("No Disk Found").style(Style::default().fg(C_DIM)), disk_area);
     }
-    let p_disk = Paragraph::new(disk_lines)
-        .block(Block::default().title(" STORAGE ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)));
-    f.render_widget(p_disk, info_chunks[1]);
 }
