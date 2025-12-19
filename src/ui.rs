@@ -171,7 +171,7 @@ fn draw_dual_chart(f: &mut Frame, d1: &[(f64, f64)], d2: &[(f64, f64)], title: &
     ];
 
     let labels = if format_bytes {
-        vec![Span::raw("0"), Span::raw(format_speed(max))]
+        vec![Span::raw("0"), Span::raw("MAX")]
     } else {
          vec![Span::raw("0"), Span::raw(format!("{:.0}", max))]
     };
