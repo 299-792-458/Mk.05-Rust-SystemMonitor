@@ -5,184 +5,197 @@ use ratatui::{
     widgets::{
         canvas::{Canvas, Rectangle},
         Axis, Block, Borders, BorderType, Chart, Dataset, Gauge, 
-        GraphType, Paragraph, Row, Table, TableState
+        GraphType, Paragraph, Row, Table, TableState, Tabs
     },
     Frame,
     symbols,
 };
 use crate::app::App;
 
-// --- THEME ---
-const C_BG: Color = Color::Rgb(15, 15, 20);        // Deep Slate
-const C_PANEL_BG: Color = Color::Rgb(20, 20, 25);  // Slightly lighter for panels
-const C_ACCENT: Color = Color::Rgb(0, 255, 200);   // Neon Cyan
-const C_SUB: Color = Color::Rgb(120, 120, 140);    // Muted Text
-const C_HEADER_BG: Color = Color::Rgb(0, 200, 160); // Header BG
-const C_HEADER_FG: Color = Color::Black;
-const C_CRIT: Color = Color::Rgb(255, 50, 80);
+// --- COLOR PALETTE (VIBRANT & DARK) ---
+const C_BG: Color = Color::Rgb(10, 10, 15);
+const C_BLOCK_BG: Color = Color::Reset; // Let transparency handle it or same as BG
+const C_BORDER: Color = Color::Rgb(60, 60, 80);
+const C_BORDER_ACTIVE: Color = Color::Rgb(0, 255, 255);
+
+const C_CPU: Color = Color::Rgb(0, 255, 255);      // Cyan
+const C_MEM: Color = Color::Rgb(255, 0, 150);      // Magenta
+const C_NET_RX: Color = Color::Rgb(50, 255, 50);   // Green
+const C_NET_TX: Color = Color::Rgb(255, 50, 50);   // Red
+const C_TEMP: Color = Color::Rgb(255, 160, 0);     // Orange
+const C_TEXT_MAIN: Color = Color::White;
+const C_TEXT_DIM: Color = Color::Rgb(100, 100, 100);
 
 // --- HELPER ---
 fn format_speed(bytes: f64) -> String {
-    if bytes < 1024.0 { format!("{:.0} B/s", bytes) }
-    else if bytes < 1024.0 * 1024.0 { format!("{:.1} KB/s", bytes / 1024.0) }
-    else { format!("{:.1} MB/s", bytes / 1024.0 / 1024.0) }
+    if bytes < 1024.0 { format!("{:.0} B", bytes) }
+    else if bytes < 1024.0 * 1024.0 { format!("{:.1} K", bytes / 1024.0) }
+    else { format!("{:.1} M", bytes / 1024.0 / 1024.0) }
+}
+
+fn create_block(title: &str, border_color: Color) -> Block {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(format!(" {} ", title), Style::default().fg(border_color).add_modifier(Modifier::BOLD)))
+        .style(Style::default().bg(C_BG))
 }
 
 pub fn draw(f: &mut Frame, app: &App) {
-    // Global Background
+    // Background fill
     let bg = Block::default().style(Style::default().bg(C_BG));
     f.render_widget(bg, f.area());
 
-    // Main Layout (Padding around the edges)
-    let main_area = f.area();
+    // Main Vertical Layout
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),  // Big Header
-            Constraint::Min(0),     // Content
-            Constraint::Length(1),  // Footer
+            Constraint::Length(3),  // Header
+            Constraint::Percentage(45), // Top Row (CPU/RAM + Net/Temp)
+            Constraint::Percentage(55), // Bottom Row (Heatmap + Processes)
         ].as_ref())
-        .split(main_area);
+        .split(f.area());
 
     draw_header(f, app, chunks[0]);
-    draw_content(f, app, chunks[1]);
-    draw_footer(f, app, chunks[2]);
+    draw_top_row(f, app, chunks[1]);
+    draw_bottom_row(f, app, chunks[2]);
 }
 
 fn draw_header(f: &mut Frame, _app: &App, area: Rect) {
-    let logo_text = vec![
-        " ▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄ ▄▄▄ ▄▄▄▄▄▄▄ ",
-        " █       █       █       █   █       █",
-        " █   ▄   █  ▄ ▄  █    ▄  █   █▄     ▄█",
-        " █▄▄▄█▄▄▄█▄▄█▄█▄▄█▄▄▄▄█▄▄█▄▄▄█ █▄▄▄▄█ ",
-    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
+        .border_style(Style::default().fg(C_BORDER));
     
-    let logo_width = logo_text[0].chars().count() as u16;
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(logo_width + 2),
-            Constraint::Min(0),
-        ].as_ref())
-        .split(area);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    // Draw Logo
-    let logo = Paragraph::new(logo_text.iter().map(|s| Line::from(Span::styled(*s, Style::default().fg(C_ACCENT)))).collect::<Vec<_>>());
-    f.render_widget(logo, layout[0]);
+    let layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
 
-    // Draw System Info / Hostname
-    let hostname = sysinfo::System::host_name().unwrap_or_else(|| "UNKNOWN".to_string());
-    let info_text = vec![
-        Line::from(vec![
-            Span::styled("SYSTEM MONITORING SUITE", Style::default().fg(C_SUB).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(vec![
-            Span::styled("TARGET: ", Style::default().fg(C_SUB)),
-            Span::styled(hostname.to_uppercase(), Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(vec![
-            Span::styled("STATUS: ", Style::default().fg(C_SUB)),
-            Span::styled("ONLINE", Style::default().fg(Color::Green)),
-        ]),
-    ];
-    let info = Paragraph::new(info_text).alignment(Alignment::Right);
-    f.render_widget(info, layout[1]);
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled("⚡ OMNI-MONITOR", Style::default().fg(C_CPU).add_modifier(Modifier::BOLD)),
+        Span::styled(" v5.0", Style::default().fg(C_TEXT_DIM)),
+    ]));
+    f.render_widget(title, layout[0]);
+
+    let help = Paragraph::new(Line::from(vec![
+        Span::styled("Q: Quit | S: Sort | ↑/↓: Select ", Style::default().fg(C_TEXT_DIM)),
+    ])).alignment(Alignment::Right);
+    f.render_widget(help, layout[1]);
 }
 
-fn draw_content(f: &mut Frame, app: &App, area: Rect) {
+fn draw_top_row(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(45), // Visuals (Charts + Heatmap)
-            Constraint::Length(1),      // Spacer
-            Constraint::Percentage(55), // Data (Processes + Info)
-        ].as_ref())
-        .split(area);
-
-    draw_visuals_section(f, app, chunks[0]);
-    draw_data_section(f, app, chunks[2]);
-}
-
-fn draw_visuals_section(f: &mut Frame, app: &App, area: Rect) {
-    // No borders, just clean layout
-    let layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(33), // CPU
-            Constraint::Percentage(33), // Heatmap
-            Constraint::Percentage(34), // Net
-        ].as_ref())
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    // 1. CPU Trend
-    draw_chart_block(f, app.cpu_history_total.iter().cloned().collect(), "CPU LOAD", C_ACCENT, layout[0], 0.0, 100.0);
+    // Left: CPU & RAM Charts Stacked
+    let left_col = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(60), Constraint::Percentage(40)]).split(chunks[0]);
+    
+    draw_chart(f, &app.cpu_history_total, "CPU USAGE", C_CPU, left_col[0], 0.0, 100.0, true);
+    draw_chart(f, &app.ram_history, "MEMORY USAGE", C_MEM, left_col[1], 0.0, 100.0, true);
 
-    // 2. Heatmap (Centerpiece)
-    draw_heatmap(f, app, layout[1]);
+    // Right: Network & Temp Stacked
+    let right_col = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(60), Constraint::Percentage(40)]).split(chunks[1]);
 
-    // 3. Network Trend
+    // Net
     let rx: Vec<(f64, f64)> = app.net_rx_history.iter().cloned().collect();
-    let max = rx.iter().map(|(_,v)| *v).fold(0.0, f64::max).max(1024.0);
-    draw_chart_block(f, rx, "NETWORK I/O", Color::Magenta, layout[2], 0.0, max);
+    let tx: Vec<(f64, f64)> = app.net_tx_history.iter().cloned().collect();
+    let max_net = rx.iter().chain(tx.iter()).map(|(_,v)| *v).fold(0.0, f64::max).max(1024.0);
+    draw_dual_chart(f, &rx, &tx, "NETWORK TRAFFIC", C_NET_RX, C_NET_TX, right_col[0], max_net, true);
+
+    // Temp
+    draw_chart(f, &app.temp_history, "TEMPERATURE", C_TEMP, right_col[1], 0.0, 100.0, false);
 }
 
-fn draw_chart_block(f: &mut Frame, data: Vec<(f64, f64)>, title: &str, color: Color, area: Rect, y_min: f64, y_max: f64) {
-    let x_min = data.first().map(|x| x.0).unwrap_or(0.0);
-    let x_max = data.last().map(|x| x.0).unwrap_or(0.0).max(x_min + 10.0);
+fn draw_bottom_row(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
 
-    // Header Style
-    let header = Block::default()
-        .style(Style::default().bg(C_PANEL_BG));
-    f.render_widget(header.clone(), area);
+    // Left: CPU Heatmap + Disks
+    let left_sub = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(60), Constraint::Percentage(40)]).split(chunks[0]);
+    draw_heatmap(f, app, left_sub[0]);
+    draw_disk_gauges(f, app, left_sub[1]);
 
-    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Min(0)]).split(area);
-    
-    // Custom Header
-    let title_line = Line::from(vec![
-        Span::styled(format!(" {} ", title), Style::default().fg(C_HEADER_FG).bg(C_HEADER_BG).add_modifier(Modifier::BOLD)),
-    ]);
-    f.render_widget(Paragraph::new(title_line), chunks[0]);
+    // Right: Processes
+    draw_processes(f, app, chunks[1]);
+}
 
-    // Chart
+fn draw_chart(f: &mut Frame, data: &std::collections::VecDeque<(f64, f64)>, title: &str, color: Color, area: Rect, min: f64, max: f64, show_pct: bool) {
+    let vec_data: Vec<(f64, f64)> = data.iter().cloned().collect();
+    let x_min = vec_data.first().map(|x| x.0).unwrap_or(0.0);
+    let x_max = vec_data.last().map(|x| x.0).unwrap_or(0.0).max(x_min + 10.0);
+
+    let current_val = vec_data.last().map(|x| x.1).unwrap_or(0.0);
+    let title_full = format!("{} [{:.1}{}]", title, current_val, if show_pct {"%"} else {"C"});
+
     let datasets = vec![
         Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(color))
-            .data(&data),
+            .data(&vec_data),
     ];
+
+    let chart = Chart::new(datasets)
+        .block(create_block(&title_full, color))
+        .x_axis(Axis::default().bounds([x_min, x_max]).labels(Vec::<Span>::new()))
+        .y_axis(Axis::default().bounds([min, max]).labels(vec![
+            Span::styled(format!("{:.0}", min), Style::default().fg(C_TEXT_DIM)),
+            Span::styled(format!("{:.0}", max), Style::default().fg(C_TEXT_DIM)),
+        ]));
     
-    // Calculate Y Labels
-    let y_labels = if y_max > 1000.0 {
-        vec![Span::raw("0"), Span::raw(format_speed(y_max))]
+    f.render_widget(chart, area);
+}
+
+fn draw_dual_chart(f: &mut Frame, d1: &[(f64, f64)], d2: &[(f64, f64)], title: &str, c1: Color, c2: Color, area: Rect, max: f64, format_bytes: bool) {
+    let x_min = d1.first().map(|x| x.0).unwrap_or(0.0);
+    let x_max = d1.last().map(|x| x.0).unwrap_or(0.0).max(x_min + 10.0);
+
+    let cur1 = d1.last().map(|x| x.1).unwrap_or(0.0);
+    let cur2 = d2.last().map(|x| x.1).unwrap_or(0.0);
+
+    let title_full = if format_bytes {
+        format!("{} [RX: {}/s | TX: {}/s]", title, format_speed(cur1), format_speed(cur2))
     } else {
-        vec![Span::raw("0"), Span::raw(format!("{:.0}", y_max))]
+        title.to_string()
+    };
+
+    let datasets = vec![
+        Dataset::default().name("RX").marker(symbols::Marker::Braille).graph_type(GraphType::Line).style(Style::default().fg(c1)).data(d1),
+        Dataset::default().name("TX").marker(symbols::Marker::Braille).graph_type(GraphType::Line).style(Style::default().fg(c2)).data(d2),
+    ];
+
+    let labels = if format_bytes {
+        vec![Span::raw("0"), Span::raw(format_speed(max))]
+    } else {
+         vec![Span::raw("0"), Span::raw(format!("{:.0}", max))]
     };
 
     let chart = Chart::new(datasets)
+        .block(create_block(&title_full, Color::White)) // Neutral title color for dual
         .x_axis(Axis::default().bounds([x_min, x_max]).labels(Vec::<Span>::new()))
-        .y_axis(Axis::default().bounds([y_min, y_max]).labels(y_labels).style(Style::default().fg(C_SUB)));
+        .y_axis(Axis::default().bounds([0.0, max]).labels(labels));
     
-    // Add inner margin for the chart so it doesn't touch edges
-    let chart_area = chunks[1].inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
-    f.render_widget(chart, chart_area);
+    f.render_widget(chart, area);
 }
 
 fn draw_heatmap(f: &mut Frame, app: &App, area: Rect) {
-    let header = Block::default().style(Style::default().bg(C_PANEL_BG));
-    f.render_widget(header.clone(), area);
-
-    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Min(0)]).split(area);
-    
-    let title_line = Line::from(vec![
-        Span::styled(" CORE HEATMAP ", Style::default().fg(C_HEADER_FG).bg(C_HEADER_BG).add_modifier(Modifier::BOLD)),
-    ]);
-    f.render_widget(Paragraph::new(title_line), chunks[0]);
-
     let core_count = app.cpu_core_history.len();
-    if core_count == 0 { return; }
+    let block = create_block("CORE HEATMAP", C_CPU);
+    
+    if core_count == 0 { 
+        f.render_widget(block, area);
+        return; 
+    }
 
-    let canvas_area = chunks[1].inner(ratatui::layout::Margin { vertical: 1, horizontal: 2 });
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
     let canvas = Canvas::default()
         .x_bounds([0.0, 100.0])
         .y_bounds([0.0, core_count as f64])
@@ -190,117 +203,82 @@ fn draw_heatmap(f: &mut Frame, app: &App, area: Rect) {
             for (core_idx, history) in app.cpu_core_history.iter().enumerate() {
                 for (time_idx, &load) in history.iter().enumerate() {
                     let color = match load {
-                        0..=10 => Color::Rgb(20, 30, 40), // Very dark (idle)
-                        11..=30 => Color::Rgb(0, 100, 200),
-                        31..=60 => Color::Rgb(0, 200, 200),
+                        0..=20 => Color::Rgb(20, 30, 50),
+                        21..=40 => Color::Rgb(0, 100, 200),
+                        41..=60 => Color::Rgb(0, 255, 200),
                         61..=80 => Color::Rgb(200, 200, 0),
                         _ => Color::Rgb(255, 50, 50),
                     };
                     ctx.draw(&Rectangle {
                         x: time_idx as f64,
                         y: (core_count - 1 - core_idx) as f64, 
-                        width: 1.2, // Overlap slightly to remove gaps
-                        height: 1.2,
+                        width: 1.5, // Gapless
+                        height: 1.5,
                         color,
                     });
                 }
             }
         });
-    f.render_widget(canvas, canvas_area);
+    f.render_widget(canvas, inner_area);
 }
 
-fn draw_data_section(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
+fn draw_disk_gauges(f: &mut Frame, app: &App, area: Rect) {
+    let block = create_block("STORAGE", C_MEM);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    // 1. Process List
-    draw_process_list(f, app, chunks[0]);
+    let constraints = vec![Constraint::Length(1); app.disks.len().min(4)];
+    let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(inner);
 
-    // 2. Info Panel
-    draw_info_panel(f, app, chunks[1]);
-}
-
-fn draw_process_list(f: &mut Frame, app: &App, area: Rect) {
-    // Styled Table
-    let bg = Block::default().style(Style::default().bg(C_PANEL_BG));
-    f.render_widget(bg, area);
-    
-    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Min(0)]).split(area);
-    
-    let (cpu_arrow, mem_arrow) = if app.process_sort_by_cpu { ("▼", " ") } else { (" ", "▼") };
-    let header_text = format!(" TOP PROCESSES [CPU{} MEM{}] ", cpu_arrow, mem_arrow);
-    
-    let title = Line::from(vec![
-        Span::styled(header_text, Style::default().fg(C_HEADER_FG).bg(C_HEADER_BG).add_modifier(Modifier::BOLD)),
-    ]);
-    f.render_widget(Paragraph::new(title), chunks[0]);
-
-    // Table Content
-    let header_cells = ["PID", "NAME", "CPU", "MEM"]
-        .iter()
-        .map(|h| ratatui::widgets::Cell::from(*h).style(Style::default().fg(C_SUB).add_modifier(Modifier::BOLD)));
-    let header = Row::new(header_cells).height(1).bottom_margin(1);
-    
-    let rows = app.processes.iter().take(15).enumerate().map(|(i, p)| {
-        let style = if i % 2 == 0 { Style::default().bg(Color::Rgb(25, 25, 30)) } else { Style::default() };
-        let cells = vec![
-            ratatui::widgets::Cell::from(p.pid.to_string()).style(Style::default().fg(C_ACCENT)),
-            ratatui::widgets::Cell::from(p.name.clone()),
-            ratatui::widgets::Cell::from(format!("{:.1}%", p.cpu)),
-            ratatui::widgets::Cell::from(format!("{}M", p.mem / 1024 / 1024)),
-        ];
-        Row::new(cells).style(style).height(1)
-    });
-    
-    let table_area = chunks[1].inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
-    let table = Table::new(rows, [
-            Constraint::Length(6),
-            Constraint::Percentage(40),
-            Constraint::Length(10),
-            Constraint::Length(10),
-        ])
-        .header(header);
-        // Removed borders for cleaner look
-
-    f.render_widget(table, table_area);
-}
-
-fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
-
-    // Temp History
-    draw_chart_block(f, app.temp_history.iter().cloned().collect(), "TEMPERATURE", C_CRIT, chunks[0], 0.0, 100.0);
-
-    // Disk Usage
-    let bg = Block::default().style(Style::default().bg(C_PANEL_BG));
-    f.render_widget(bg, chunks[1]);
-    
-    let disk_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(1), Constraint::Min(0)]).split(chunks[1]);
-    let title = Line::from(vec![Span::styled(" STORAGE ", Style::default().fg(C_HEADER_FG).bg(C_HEADER_BG).add_modifier(Modifier::BOLD))]);
-    f.render_widget(Paragraph::new(title), disk_chunks[0]);
-
-    let inner = disk_chunks[1].inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
-    let disk_rows = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(2), Constraint::Length(2), Constraint::Length(2)]).split(inner);
-
-    for (i, (name, used, total)) in app.disks.iter().take(3).enumerate() {
-        if i >= disk_rows.len() { break; }
-        
+    for (i, (name, used, total)) in app.disks.iter().take(4).enumerate() {
+        if i >= chunks.len() { break; }
         let ratio = *used as f64 / *total as f64;
-        let pct = ratio * 100.0;
-        let color = if pct > 85.0 { C_CRIT } else { C_ACCENT };
+        let label = format!("{} {:.0}%", name, ratio * 100.0);
         
-        let label = format!("{} {:.0}%", name, pct);
         let gauge = Gauge::default()
-            .gauge_style(Style::default().fg(color).bg(Color::Rgb(30,30,35)))
+            .gauge_style(Style::default().fg(C_MEM).bg(C_BG))
             .ratio(ratio)
             .label(label);
-        f.render_widget(gauge, disk_rows[i]);
+        f.render_widget(gauge, chunks[i]);
     }
 }
 
-fn draw_footer(f: &mut Frame, _app: &App, area: Rect) {
-    let footer = Paragraph::new(" OMNI // RUST TUI // 2025 ").style(Style::default().fg(C_SUB).bg(C_BG)).alignment(Alignment::Center);
-    f.render_widget(footer, area);
+fn draw_processes(f: &mut Frame, app: &App, area: Rect) {
+    let block = create_block("PROCESSES", C_TEXT_MAIN);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (cpu_col, mem_col) = if app.process_sort_by_cpu { (C_CPU, C_TEXT_DIM) } else { (C_TEXT_DIM, C_MEM) };
+    
+    let header_cells = vec![
+        ratatui::widgets::Cell::from("PID").style(Style::default().fg(C_TEXT_DIM)),
+        ratatui::widgets::Cell::from("NAME").style(Style::default().fg(C_TEXT_MAIN).add_modifier(Modifier::BOLD)),
+        ratatui::widgets::Cell::from("CPU%").style(Style::default().fg(cpu_col).add_modifier(Modifier::BOLD)),
+        ratatui::widgets::Cell::from("MEM").style(Style::default().fg(mem_col).add_modifier(Modifier::BOLD)),
+    ];
+    let header = Row::new(header_cells).height(1).bottom_margin(0);
+
+    let rows = app.processes.iter().take(20).enumerate().map(|(i, p)| {
+        let style = if i % 2 == 0 { Style::default().bg(Color::Rgb(15, 15, 20)) } else { Style::default() };
+        let cells = vec![
+            ratatui::widgets::Cell::from(p.pid.to_string()).style(Style::default().fg(C_TEXT_DIM)),
+            ratatui::widgets::Cell::from(p.name.clone()),
+            ratatui::widgets::Cell::from(format!("{:.1}", p.cpu)),
+            ratatui::widgets::Cell::from(format!("{:.0}M", p.mem as f64 / 1024.0 / 1024.0)),
+        ];
+        Row::new(cells).style(style).height(1)
+    });
+
+    let table = Table::new(rows, [
+        Constraint::Length(8),
+        Constraint::Percentage(40),
+        Constraint::Length(15),
+        Constraint::Length(15),
+    ]).header(header);
+
+    // Render list (using render_stateful_widget if we want selection, or simple render for now)
+    // To enable selection, we need to pass table state.
+    let mut state = TableState::default();
+    state.select(Some(app.process_scroll_state));
+    f.render_stateful_widget(table.highlight_style(Style::default().bg(Color::Rgb(40,40,50))), inner, &mut state);
 }
