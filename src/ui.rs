@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, BorderType, Chart, Dataset, Paragraph, Row, Table},
+    widgets::{Axis, Block, Borders, BorderType, Chart, Dataset, GraphType, Paragraph, Row, Table},
     Frame,
     symbols,
 };
@@ -35,18 +35,19 @@ fn draw_top_row(f: &mut Frame, app: &App, area: Rect) {
 
     // 1. CPU Chart
     let x_min = if cpu_data.is_empty() { 0.0 } else { cpu_data.first().unwrap().0 };
-    let x_max = if cpu_data.is_empty() { 10.0 } else { cpu_data.last().unwrap().0 };
+    let x_max = if cpu_data.is_empty() { 10.0 } else { cpu_data.last().unwrap().0.max(x_min + 10.0) };
     
     let datasets = vec![
         Dataset::default()
             .name("CPU Total %")
             .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Cyan))
             .data(&cpu_data),
     ];
     
     let chart = Chart::new(datasets)
-        .block(Block::default().title(" CPU Usage ").borders(Borders::ALL).border_type(BorderType::Rounded))
+        .block(Block::default().title(" CPU Usage (1ms Precision, 1s Avg) ").borders(Borders::ALL).border_type(BorderType::Rounded))
         .x_axis(Axis::default().bounds([x_min, x_max]))
         .y_axis(Axis::default().bounds([0.0, 100.0]).labels(vec![
             Span::styled("0", Style::default().fg(Color::Gray)),
@@ -59,6 +60,7 @@ fn draw_top_row(f: &mut Frame, app: &App, area: Rect) {
         Dataset::default()
             .name("RAM %")
             .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Magenta))
             .data(&ram_data),
     ];
@@ -85,15 +87,25 @@ fn draw_mid_row(f: &mut Frame, app: &App, area: Rect) {
 
     // 1. Network Chart
     let x_min = if rx_data.is_empty() { 0.0 } else { rx_data.first().unwrap().0 };
-    let x_max = if rx_data.is_empty() { 10.0 } else { rx_data.last().unwrap().0 };
+    let x_max = if rx_data.is_empty() { 10.0 } else { rx_data.last().unwrap().0.max(x_min + 10.0) };
     
     let max_rx = rx_data.iter().map(|(_, y)| *y).fold(0.0, f64::max);
     let max_tx = tx_data.iter().map(|(_, y)| *y).fold(0.0, f64::max);
     let max_y = max_rx.max(max_tx).max(1024.0); 
 
     let datasets_net = vec![
-        Dataset::default().name("RX").marker(symbols::Marker::Braille).style(Style::default().fg(Color::Green)).data(&rx_data),
-        Dataset::default().name("TX").marker(symbols::Marker::Braille).style(Style::default().fg(Color::Red)).data(&tx_data),
+        Dataset::default()
+            .name("RX")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Green))
+            .data(&rx_data),
+        Dataset::default()
+            .name("TX")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Red))
+            .data(&tx_data),
     ];
     
     let chart_net = Chart::new(datasets_net)
@@ -130,7 +142,7 @@ fn draw_mid_row(f: &mut Frame, app: &App, area: Rect) {
         temp_text.push(line);
     }
     if temp_text.is_empty() {
-        temp_text.push(Line::from(Span::raw("No sensors detected (macOS requires privileges/drivers?)")));
+        temp_text.push(Line::from(Span::raw("No sensors detected")));
     }
     let p_temp = Paragraph::new(temp_text).block(Block::default().title(" Sensors ").borders(Borders::ALL).border_type(BorderType::Rounded));
     f.render_widget(p_temp, info_chunks[1]);
@@ -160,7 +172,7 @@ fn draw_bot_row(f: &mut Frame, app: &App, area: Rect) {
         ])
         .header(header)
         .block(Block::default().title(" Top Processes ").borders(Borders::ALL).border_type(BorderType::Rounded))
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .row_highlight_style(Style::default().add_modifier(Modifier::BOLD))
         .highlight_symbol(">> ");
         
     f.render_widget(table, area);
