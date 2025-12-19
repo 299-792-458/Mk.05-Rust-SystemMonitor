@@ -166,7 +166,6 @@ fn draw_details_row(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_processes(f: &mut Frame, app: &App, area: Rect) {
     let header_style = Style::default().fg(Color::Black).bg(COLOR_NEON_CYAN).add_modifier(Modifier::BOLD);
-    let row_style = Style::default().fg(COLOR_TEXT);
     
     let header = Row::new(vec![" PID", " NAME", " CPU%", " MEM(MB)"])
         .style(header_style)

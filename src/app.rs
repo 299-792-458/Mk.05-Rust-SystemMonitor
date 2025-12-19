@@ -22,7 +22,7 @@ pub struct App {
     // Aggregation Logic for 1s updates
     accumulated_stats: Vec<SystemStats>, // Buffer for 1ms stats
     last_chart_update: Instant,
-    chart_tick_count: f64,
+    pub chart_tick_count: f64,
 }
 
 impl App {
