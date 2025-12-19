@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
-use sysinfo::{CpuExt, System, SystemExt, DiskExt, NetworkExt};
+use sysinfo::System;
 
 #[derive(Debug, Clone)]
 pub struct SystemStats {
@@ -43,15 +43,24 @@ impl Monitor {
             loop {
                 let now = Instant::now();
                 if now.duration_since(last_tick) >= self.target_interval {
-                    // Critical section: Fast refresh
-                    // Note: refresh_cpu() is lighter than refresh_all()
-                    self.sys.refresh_cpu();
+                    // Update CPU and Memory
+                    self.sys.refresh_cpu_all();
                     self.sys.refresh_memory();
                     
+                    let cpus = self.sys.cpus();
+                    let cpu_usage: Vec<f32> = cpus.iter().map(|cpu| cpu.cpu_usage()).collect();
+                    
+                    // Calculate global CPU usage manually if needed
+                    let total_cpu_usage: f32 = if !cpu_usage.is_empty() {
+                        cpu_usage.iter().sum::<f32>() / cpu_usage.len() as f32
+                    } else {
+                        0.0
+                    };
+
                     // Construct stats
                     let stats = SystemStats {
-                        cpu_usage: self.sys.cpus().iter().map(|cpu| cpu.cpu_usage()).collect(),
-                        total_cpu_usage: self.sys.global_cpu_info().cpu_usage(),
+                        cpu_usage,
+                        total_cpu_usage,
                         ram_used: self.sys.used_memory(),
                         ram_total: self.sys.total_memory(),
                         swap_used: self.sys.used_swap(),
@@ -65,8 +74,6 @@ impl Monitor {
                     last_tick = now;
                 }
                 
-                // Sleep a tiny bit to prevent 100% CPU usage on the monitor thread itself
-                // if the work takes less than 1ms.
                 thread::sleep(Duration::from_micros(100));
             }
         });
