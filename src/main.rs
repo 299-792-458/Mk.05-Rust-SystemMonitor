@@ -70,7 +70,9 @@ fn run_app<B: ratatui::backend::Backend>(
             
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                app.on_key(key.code.into());
+                if let KeyCode::Char(c) = key.code {
+                    app.on_key(c);
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => app.should_quit = true,
                     _ => {}
