@@ -10,6 +10,7 @@ pub struct App {
     pub ram_history: VecDeque<(f64, f64)>,
     pub net_rx_history: VecDeque<(f64, f64)>,
     pub net_tx_history: VecDeque<(f64, f64)>,
+    pub temp_history: VecDeque<(f64, f64)>, // Max Temp History
     
     // HEATMAP DATA: Per-core history [CoreIndex][TimeStep]
     // Storing as u8 (0-100) to save memory
@@ -41,6 +42,7 @@ impl App {
             ram_history: VecDeque::with_capacity(max_history),
             net_rx_history: VecDeque::with_capacity(max_history),
             net_tx_history: VecDeque::with_capacity(max_history),
+            temp_history: VecDeque::with_capacity(max_history),
             cpu_core_history: Vec::new(), // Init dynamically
             processes: Vec::new(),
             disks: Vec::new(),
@@ -132,6 +134,14 @@ impl App {
         if self.net_rx_history.len() >= self.max_history_len { self.net_rx_history.pop_front(); self.net_tx_history.pop_front(); }
         self.net_rx_history.push_back((self.chart_tick_count, avg_rx));
         self.net_tx_history.push_back((self.chart_tick_count, avg_tx));
+
+        // Temp (Max observed in this interval)
+        let max_temp = self.accumulated_stats.iter()
+            .flat_map(|s| s.temperatures.iter().map(|(_, t)| *t))
+            .fold(0.0_f32, f32::max);
+            
+        if self.temp_history.len() >= self.max_history_len { self.temp_history.pop_front(); }
+        self.temp_history.push_back((self.chart_tick_count, max_temp as f64));
 
         self.accumulated_stats.clear();
     }
