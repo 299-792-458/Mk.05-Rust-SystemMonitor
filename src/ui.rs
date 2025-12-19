@@ -20,6 +20,17 @@ const C_CRIT: Color = Color::Rgb(255, 20, 60);
 const C_TEXT: Color = Color::Rgb(220, 220, 220);
 const C_DIM: Color = Color::Rgb(60, 60, 70);
 
+// --- HELPER ---
+fn format_speed(bytes: f64) -> String {
+    if bytes < 1024.0 {
+        format!("{:.0} B/s", bytes)
+    } else if bytes < 1024.0 * 1024.0 {
+        format!("{:.1} KB/s", bytes / 1024.0)
+    } else {
+        format!("{:.1} MB/s", bytes / 1024.0 / 1024.0)
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &App) {
     let bg = Block::default().style(Style::default().bg(C_BG));
     f.render_widget(bg, f.area());
@@ -41,13 +52,15 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_title_bar(f: &mut Frame, _app: &App, area: Rect) {
+    let hostname = sysinfo::System::host_name().unwrap_or_else(|| "LOCALHOST".to_string());
     let title = Line::from(vec![
         Span::styled(" OMNI-MONITOR ", Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Span::styled(" // SYSTEM V5 ", Style::default().fg(C_DIM)),
+        Span::styled(format!("// {} ", hostname.to_uppercase()), Style::default().fg(C_DIM)),
     ]);
     f.render_widget(Paragraph::new(title).alignment(Alignment::Left), area);
     
     let help = Line::from(vec![
+        Span::styled(" [↑/↓] Select ", Style::default().fg(C_TEXT)),
         Span::styled(" [S] Sort ", Style::default().fg(C_ACCENT)),
         Span::styled(" [Q] Quit ", Style::default().fg(C_CRIT)),
     ]);
@@ -78,15 +91,21 @@ fn draw_top_charts(f: &mut Frame, app: &App, area: Rect) {
     let rx_data: Vec<(f64, f64)> = app.net_rx_history.iter().cloned().collect();
     let tx_data: Vec<(f64, f64)> = app.net_tx_history.iter().cloned().collect();
     let max_net = rx_data.iter().chain(tx_data.iter()).map(|(_, v)| *v).fold(0.0, f64::max).max(1024.0);
+    
+    // Auto-scale Label
+    let y_labels = vec![
+        Span::raw("0"),
+        Span::raw(format_speed(max_net)),
+    ];
 
     let ds_net = vec![
         Dataset::default().name("RX").marker(symbols::Marker::Braille).graph_type(GraphType::Line).style(Style::default().fg(Color::Green)).data(&rx_data),
         Dataset::default().name("TX").marker(symbols::Marker::Braille).graph_type(GraphType::Line).style(Style::default().fg(Color::Magenta)).data(&tx_data),
     ];
     let chart_net = Chart::new(ds_net)
-        .block(Block::default().title(" I/O STREAM ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)))
+        .block(Block::default().title(" NETWORK I/O ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)))
         .x_axis(Axis::default().bounds([x_min, x_max]).labels(Vec::<Span>::new()))
-        .y_axis(Axis::default().bounds([0.0, max_net]).labels(vec![Span::raw("0"), Span::raw("MAX")]));
+        .y_axis(Axis::default().bounds([0.0, max_net]).labels(y_labels));
     f.render_widget(chart_net, chunks[1]);
 }
 
