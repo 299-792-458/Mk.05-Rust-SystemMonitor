@@ -1,9 +1,10 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Span, Line},
-    widgets::{Block, Borders, BorderType, Gauge, Paragraph, Sparkline},
+    text::{Line, Span},
+    widgets::{Axis, Block, Borders, BorderType, Chart, Dataset, Paragraph, Row, Table},
     Frame,
+    symbols,
 };
 use crate::app::App;
 
@@ -11,126 +12,156 @@ pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(10),    // Main Content
-            Constraint::Length(3),  // Footer
+            Constraint::Percentage(40), // Top: CPU & RAM Charts
+            Constraint::Percentage(30), // Mid: Net & Info
+            Constraint::Percentage(30), // Bot: Processes
         ].as_ref())
         .split(f.area());
 
-    draw_header(f, app, chunks[0]);
-    draw_body(f, app, chunks[1]);
-    draw_footer(f, app, chunks[2]);
+    draw_top_row(f, app, chunks[0]);
+    draw_mid_row(f, app, chunks[1]);
+    draw_bot_row(f, app, chunks[2]);
 }
 
-fn draw_header(f: &mut Frame, _app: &App, area: Rect) {
-    let text = Line::from(vec![
-        Span::styled("OMNI-MONITOR", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw(" | "),
-        Span::styled("v1.0.0", Style::default().fg(Color::DarkGray)),
-        Span::raw(" | "),
-        Span::styled("System: Darwin (macOS)", Style::default().fg(Color::Magenta)),
-    ]);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" System Status ");
-    
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .alignment(ratatui::layout::Alignment::Center);
-    
-    f.render_widget(paragraph, area);
-}
-
-fn draw_body(f: &mut Frame, app: &App, area: Rect) {
+fn draw_top_row(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50), // CPU
-            Constraint::Percentage(50), // Memory
-        ].as_ref())
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
-
-    draw_cpu(f, app, chunks[0]);
-    draw_memory(f, app, chunks[1]);
-}
-
-fn draw_cpu(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Gauge
-            Constraint::Min(5),    // Sparklines
-        ].as_ref())
-        .split(area);
-
-    // 1. CPU Gauge (Total Average)
-    let label = format!("{:.2}%", app.avg_cpu_1s);
-    let gauge = Gauge::default()
-        .block(Block::default().title(" CPU Average (1s) ").borders(Borders::ALL).border_type(BorderType::Rounded))
-        .gauge_style(Style::default().fg(Color::Green).bg(Color::Black).add_modifier(Modifier::ITALIC))
-        .percent(app.avg_cpu_1s as u16)
-        .label(label);
-    f.render_widget(gauge, chunks[0]);
-
-    // 2. CPU Sparklines (Per Core - showing only first 4 for demo or aggregated)
-    let block = Block::default().title(" CPU Real-time Activity (1ms sampling) ").borders(Borders::ALL).border_type(BorderType::Rounded);
-    f.render_widget(block, chunks[1]);
-
-    // Use a slight margin
-    let inner_area = chunks[1].inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
     
-    if !app.cpu_history.is_empty() {
-        // Show Core 0 as representative or Sum
-        let core_0_data: Vec<u64> = app.cpu_history[0].iter().cloned().collect();
-        let sparkline = Sparkline::default()
-            .block(Block::default().title(" Core 0 Activity "))
-            .style(Style::default().fg(Color::Yellow))
-            .data(&core_0_data)
-            .bar_set(ratatui::symbols::bar::NINE_LEVELS);
-        
-        f.render_widget(sparkline, inner_area);
-    }
+    // Data Preparation
+    let cpu_data: Vec<(f64, f64)> = app.cpu_history_total.iter().cloned().collect();
+    let ram_data: Vec<(f64, f64)> = app.ram_history.iter().cloned().collect();
+
+    // 1. CPU Chart
+    let x_min = if cpu_data.is_empty() { 0.0 } else { cpu_data.first().unwrap().0 };
+    let x_max = if cpu_data.is_empty() { 10.0 } else { cpu_data.last().unwrap().0 };
+    
+    let datasets = vec![
+        Dataset::default()
+            .name("CPU Total %")
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(Color::Cyan))
+            .data(&cpu_data),
+    ];
+    
+    let chart = Chart::new(datasets)
+        .block(Block::default().title(" CPU Usage ").borders(Borders::ALL).border_type(BorderType::Rounded))
+        .x_axis(Axis::default().bounds([x_min, x_max]))
+        .y_axis(Axis::default().bounds([0.0, 100.0]).labels(vec![
+            Span::styled("0", Style::default().fg(Color::Gray)),
+            Span::styled("100", Style::default().fg(Color::Gray)),
+        ]));
+    f.render_widget(chart, chunks[0]);
+
+    // 2. RAM Chart
+    let datasets_ram = vec![
+        Dataset::default()
+            .name("RAM %")
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(Color::Magenta))
+            .data(&ram_data),
+    ];
+
+    let chart_ram = Chart::new(datasets_ram)
+        .block(Block::default().title(" Memory Usage ").borders(Borders::ALL).border_type(BorderType::Rounded))
+        .x_axis(Axis::default().bounds([x_min, x_max]))
+        .y_axis(Axis::default().bounds([0.0, 100.0]).labels(vec![
+            Span::styled("0", Style::default().fg(Color::Gray)),
+            Span::styled("100", Style::default().fg(Color::Gray)),
+        ]));
+    f.render_widget(chart_ram, chunks[1]);
 }
 
-fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
+fn draw_mid_row(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Gauge
-            Constraint::Min(5),    // Sparkline
-        ].as_ref())
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    if let Some(stats) = &app.last_stats {
-        let percent = (stats.ram_used as f64 / stats.ram_total as f64 * 100.0) as u16;
-        let label = format!("{}/{} MB", stats.ram_used / 1024 / 1024, stats.ram_total / 1024 / 1024);
+    // Data Prep
+    let rx_data: Vec<(f64, f64)> = app.net_rx_history.iter().cloned().collect();
+    let tx_data: Vec<(f64, f64)> = app.net_tx_history.iter().cloned().collect();
 
-        let gauge = Gauge::default()
-            .block(Block::default().title(" Memory Usage ").borders(Borders::ALL).border_type(BorderType::Rounded))
-            .gauge_style(Style::default().fg(Color::Magenta).bg(Color::Black))
-            .percent(percent)
-            .label(label);
-        f.render_widget(gauge, chunks[0]);
+    // 1. Network Chart
+    let x_min = if rx_data.is_empty() { 0.0 } else { rx_data.first().unwrap().0 };
+    let x_max = if rx_data.is_empty() { 10.0 } else { rx_data.last().unwrap().0 };
+    
+    let max_rx = rx_data.iter().map(|(_, y)| *y).fold(0.0, f64::max);
+    let max_tx = tx_data.iter().map(|(_, y)| *y).fold(0.0, f64::max);
+    let max_y = max_rx.max(max_tx).max(1024.0); 
 
-        let ram_data: Vec<u64> = app.ram_history.iter().cloned().collect();
-        let sparkline = Sparkline::default()
-            .block(Block::default().title(" Memory Trend ").borders(Borders::ALL).border_type(BorderType::Rounded))
-            .style(Style::default().fg(Color::Magenta))
-            .data(&ram_data)
-            .bar_set(ratatui::symbols::bar::NINE_LEVELS);
-        f.render_widget(sparkline, chunks[1]);
+    let datasets_net = vec![
+        Dataset::default().name("RX").marker(symbols::Marker::Braille).style(Style::default().fg(Color::Green)).data(&rx_data),
+        Dataset::default().name("TX").marker(symbols::Marker::Braille).style(Style::default().fg(Color::Red)).data(&tx_data),
+    ];
+    
+    let chart_net = Chart::new(datasets_net)
+        .block(Block::default().title(" Network Traffic (B/s) ").borders(Borders::ALL).border_type(BorderType::Rounded))
+        .x_axis(Axis::default().bounds([x_min, x_max]))
+        .y_axis(Axis::default().bounds([0.0, max_y]).labels(vec![
+            Span::raw("0"),
+            Span::raw(format!("{:.0}", max_y)),
+        ]));
+    f.render_widget(chart_net, chunks[0]);
+
+    // 2. Info Panel
+    let info_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(chunks[1]);
+    
+    let mut disk_text = vec![];
+    for (name, used, total) in &app.disks {
+        let usage_pct = (*used as f64 / *total as f64) * 100.0;
+        let line = Line::from(vec![
+            Span::styled(format!("{}: ", name), Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.1}% ", usage_pct)),
+            Span::styled(format!("({}/{} GB)", used/1024/1024/1024, total/1024/1024/1024), Style::default().fg(Color::DarkGray)),
+        ]);
+        disk_text.push(line);
     }
+    let p_disk = Paragraph::new(disk_text).block(Block::default().title(" Disks ").borders(Borders::ALL).border_type(BorderType::Rounded));
+    f.render_widget(p_disk, info_chunks[0]);
+
+    let mut temp_text = vec![];
+    for (label, temp) in &app.temps {
+        let line = Line::from(vec![
+            Span::styled(format!("{}: ", label), Style::default().fg(Color::Blue)),
+            Span::raw(format!("{:.1}°C", temp)),
+        ]);
+        temp_text.push(line);
+    }
+    if temp_text.is_empty() {
+        temp_text.push(Line::from(Span::raw("No sensors detected (macOS requires privileges/drivers?)")));
+    }
+    let p_temp = Paragraph::new(temp_text).block(Block::default().title(" Sensors ").borders(Borders::ALL).border_type(BorderType::Rounded));
+    f.render_widget(p_temp, info_chunks[1]);
 }
 
-fn draw_footer(f: &mut Frame, _app: &App, area: Rect) {
-    let text = Line::from(vec![
-        Span::styled("Q", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Span::raw(" to Quit | "),
-        Span::styled("Sampling: 1ms", Style::default().fg(Color::Green)),
-    ]);
-    let p = Paragraph::new(text).alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(p, area);
+fn draw_bot_row(f: &mut Frame, app: &App, area: Rect) {
+    let header_cells = ["PID", "Name", "CPU %", "Mem (MB)"]
+        .iter()
+        .map(|h| ratatui::widgets::Cell::from(*h).style(Style::default().fg(Color::Yellow)));
+    let header = Row::new(header_cells).height(1).bottom_margin(1);
+    
+    let rows = app.processes.iter().map(|p| {
+        let cells = vec![
+            ratatui::widgets::Cell::from(p.pid.to_string()),
+            ratatui::widgets::Cell::from(p.name.clone()),
+            ratatui::widgets::Cell::from(format!("{:.1}", p.cpu)),
+            ratatui::widgets::Cell::from(format!("{}", p.mem / 1024 / 1024)),
+        ];
+        Row::new(cells).height(1)
+    });
+    
+    let table = Table::new(rows, [
+            Constraint::Length(8),
+            Constraint::Percentage(40),
+            Constraint::Length(10),
+            Constraint::Length(10),
+        ])
+        .header(header)
+        .block(Block::default().title(" Top Processes ").borders(Borders::ALL).border_type(BorderType::Rounded))
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol(">> ");
+        
+    f.render_widget(table, area);
 }
