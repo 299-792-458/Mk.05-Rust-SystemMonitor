@@ -30,25 +30,24 @@ pub fn draw(f: &mut Frame, app: &App) {
             Constraint::Length(1),  // Title
             Constraint::Percentage(30), // Top: Charts
             Constraint::Percentage(25), // Mid: HEATMAP
-            Constraint::Percentage(45), // Bot: Processes
+            Constraint::Percentage(45), // Bot: Processes & Info
         ].as_ref())
         .split(f.area());
 
     draw_title_bar(f, app, chunks[0]);
     draw_top_charts(f, app, chunks[1]);
     draw_heatmap(f, app, chunks[2]);
-    draw_process_table(f, app, chunks[3]);
+    draw_bottom_section(f, app, chunks[3]);
 }
 
 fn draw_title_bar(f: &mut Frame, _app: &App, area: Rect) {
     let title = Line::from(vec![
         Span::styled(" OMNI-MONITOR ", Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Span::styled(" // SYSTEM V4 ", Style::default().fg(C_DIM)),
+        Span::styled(" // SYSTEM V5 ", Style::default().fg(C_DIM)),
     ]);
     f.render_widget(Paragraph::new(title).alignment(Alignment::Left), area);
     
     let help = Line::from(vec![
-        Span::styled(" [↑/↓] Select ", Style::default().fg(C_TEXT)),
         Span::styled(" [S] Sort ", Style::default().fg(C_ACCENT)),
         Span::styled(" [Q] Quit ", Style::default().fg(C_CRIT)),
     ]);
@@ -92,10 +91,6 @@ fn draw_top_charts(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_heatmap(f: &mut Frame, app: &App, area: Rect) {
-    // Canvas based heatmap
-    // X axis: Time (0 to 100 steps)
-    // Y axis: Core Index (0 to N)
-    
     let core_count = app.cpu_core_history.len();
     if core_count == 0 { return; }
     
@@ -113,12 +108,9 @@ fn draw_heatmap(f: &mut Frame, app: &App, area: Rect) {
                         61..=80 => Color::Yellow,
                         _ => Color::Red,
                     };
-                    
-                    // Draw a rectangle for each data point
-                    // Adjust width to fill gaps if needed
                     ctx.draw(&Rectangle {
                         x: time_idx as f64,
-                        y: (core_count - 1 - core_idx) as f64, // Invert Y so Core 0 is top
+                        y: (core_count - 1 - core_idx) as f64, 
                         width: 1.0,
                         height: 1.0,
                         color,
@@ -130,13 +122,20 @@ fn draw_heatmap(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(canvas, area);
 }
 
-fn draw_process_table(f: &mut Frame, app: &App, area: Rect) {
+fn draw_bottom_section(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    // 1. Process List (Top 5)
     let header_cells = ["PID", "Name", "CPU%", "MEM(MB)"]
         .iter()
         .map(|h| ratatui::widgets::Cell::from(*h).style(Style::default().fg(C_BG).bg(C_ACCENT).add_modifier(Modifier::BOLD)));
     let header = Row::new(header_cells).height(1).bottom_margin(0);
     
-    let rows = app.processes.iter().map(|p| {
+    // LIMIT TO TOP 5
+    let rows = app.processes.iter().take(5).map(|p| {
         let cells = vec![
             ratatui::widgets::Cell::from(p.pid.to_string()),
             ratatui::widgets::Cell::from(p.name.clone()),
@@ -153,13 +152,52 @@ fn draw_process_table(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(10),
         ])
         .header(header)
-        .block(Block::default().title(" PROCESS MANAGER ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)))
+        .block(Block::default().title(" TOP 5 PROCESSES ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)))
         .highlight_style(Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
         .highlight_symbol(">> ");
-        
-    // Stateful widget render
-    let mut state = TableState::default();
-    state.select(Some(app.process_scroll_state));
     
-    f.render_stateful_widget(table, area, &mut state);
+    // Use state only if we had interaction, but with Top 5 static, maybe just render.
+    // Keeping stateful for future extensibility or selection within Top 5.
+    let mut state = TableState::default();
+    state.select(Some(app.process_scroll_state.min(4))); // Clamp selection to 5
+    f.render_stateful_widget(table, chunks[0], &mut state);
+
+
+    // 2. Info Panel (Sensors & Disk)
+    let info_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
+
+    // Sensors
+    let mut temp_lines = vec![];
+    if app.temps.is_empty() {
+         temp_lines.push(Line::from(Span::styled(" No Sensors Found ", Style::default().fg(C_DIM))));
+    } else {
+        for (label, temp) in &app.temps {
+            temp_lines.push(Line::from(vec![
+                Span::styled(format!("{}: ", label), Style::default().fg(C_TEXT)),
+                Span::styled(format!("{:.1}°C", temp), Style::default().fg(if *temp > 70.0 { C_CRIT } else { C_ACCENT })),
+            ]));
+        }
+    }
+    let p_temp = Paragraph::new(temp_lines)
+        .block(Block::default().title(" SENSORS ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)));
+    f.render_widget(p_temp, info_chunks[0]);
+
+    // Disks
+    let mut disk_lines = vec![];
+    for (name, used, total) in &app.disks {
+        let pct = (*used as f64 / *total as f64) * 100.0;
+        let color = if pct > 90.0 { C_CRIT } else if pct > 75.0 { C_WARN } else { Color::Green };
+        
+        disk_lines.push(Line::from(vec![
+            Span::styled(format!("HDD {}: ", name), Style::default().fg(C_TEXT)),
+            Span::styled(format!("{:.1}% ", pct), Style::default().fg(color)),
+            Span::styled(format!("({}/{} GB)", used/1024/1024/1024, total/1024/1024/1024), Style::default().fg(C_DIM)),
+        ]));
+    }
+    let p_disk = Paragraph::new(disk_lines)
+        .block(Block::default().title(" STORAGE ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(C_DIM)));
+    f.render_widget(p_disk, info_chunks[1]);
 }
