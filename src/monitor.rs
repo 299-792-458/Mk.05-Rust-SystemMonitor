@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
-use sysinfo::{System, Networks, Disks, Components, ProcessRefreshKind, RefreshKind};
+use sysinfo::{System, Networks, Disks, Components};
 
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
@@ -144,7 +144,7 @@ impl Monitor {
 
                 // Temps
                 let temps = self.components.iter().map(|c| {
-                    (c.label().to_string(), c.temperature())
+                    (c.label().to_string(), c.temperature().unwrap_or(0.0))
                 }).collect();
 
                 let stats = SystemStats {
