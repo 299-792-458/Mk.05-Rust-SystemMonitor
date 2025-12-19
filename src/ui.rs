@@ -87,7 +87,7 @@ fn draw_graphs_row(f: &mut Frame, app: &App, area: Rect) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(COLOR_DIM)))
-        .x_axis(Axis::default().bounds([x_min, x_max]).labels(vec![]).style(Style::default().fg(COLOR_DIM)))
+        .x_axis(Axis::default().bounds([x_min, x_max]).labels(Vec::<Span>::new()).style(Style::default().fg(COLOR_DIM)))
         .y_axis(Axis::default().bounds([0.0, 100.0]).labels(vec![
             Span::styled("0%", Style::default().fg(COLOR_DIM)),
             Span::styled("100%", Style::default().fg(COLOR_DIM)),
@@ -117,7 +117,7 @@ fn draw_graphs_row(f: &mut Frame, app: &App, area: Rect) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(COLOR_DIM)))
-        .x_axis(Axis::default().bounds([x_min, x_max]).labels(vec![])) // Synced X
+        .x_axis(Axis::default().bounds([x_min, x_max]).labels(Vec::<Span>::new())) // Synced X
         .y_axis(Axis::default().bounds([0.0, 100.0]).labels(vec![
             Span::styled("0", Style::default().fg(COLOR_DIM)),
             Span::styled("100", Style::default().fg(COLOR_DIM)),
@@ -140,7 +140,7 @@ fn draw_graphs_row(f: &mut Frame, app: &App, area: Rect) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(COLOR_DIM)))
-        .x_axis(Axis::default().bounds([x_min, x_max]).labels(vec![]))
+        .x_axis(Axis::default().bounds([x_min, x_max]).labels(Vec::<Span>::new()))
         .y_axis(Axis::default().bounds([0.0, max_val]).labels(vec![
             Span::styled("0", Style::default().fg(COLOR_DIM)),
             Span::styled("MAX", Style::default().fg(COLOR_DIM)),
