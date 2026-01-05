@@ -7,7 +7,7 @@ use monitor::{Monitor, MonitorEvent};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -58,6 +58,7 @@ fn run_app<B: ratatui::backend::Backend>(
 ) -> io::Result<()> {
     let tick_rate = Duration::from_millis(30); // ~30 FPS UI refresh rate
     let mut last_tick = Instant::now();
+    let mut last_stats_tick = Instant::now();
 
     loop {
         // 1. Draw UI
@@ -70,7 +71,7 @@ fn run_app<B: ratatui::backend::Backend>(
             
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                app.on_key_code(key.code);
+                app.on_key_event(key);
             }
         }
 
@@ -82,7 +83,10 @@ fn run_app<B: ratatui::backend::Backend>(
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 MonitorEvent::Stats(stats) => {
-                    app.on_tick(stats);
+                    if last_stats_tick.elapsed() >= Duration::from_millis(app.tick_ms) {
+                        app.on_tick(stats);
+                        last_stats_tick = Instant::now();
+                    }
                 }
             }
         }

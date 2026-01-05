@@ -68,10 +68,19 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let text = Line::from(vec![
         Span::styled(" ⚡ OMNI-MONITOR ", Style::default().fg(C_ACCENT_MAIN).add_modifier(Modifier::BOLD)),
         Span::styled(format!("| HOST: {} | UPTIME: {:02}h {:02}m ", hostname.to_uppercase(), h, m), Style::default().fg(C_TEXT_DIM)),
-        Span::styled(" | [Q] Quit [S] Sort", Style::default().fg(C_ACCENT_WARN)),
+        Span::styled(" | [Q] Quit [S] Sort [+/-] Tick", Style::default().fg(C_ACCENT_WARN)),
     ]);
-    
-    f.render_widget(Paragraph::new(text).alignment(Alignment::Left).style(Style::default().bg(Color::Rgb(10,12,20))), area);
+    let tick_label = format!("TICK {}ms", app.tick_ms);
+    let tick_text = Line::from(Span::styled(tick_label, Style::default().fg(C_TEXT_LITE)));
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(14)].as_ref())
+        .split(area);
+
+    let bar_style = Style::default().bg(Color::Rgb(10,12,20));
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Left).style(bar_style), cols[0]);
+    f.render_widget(Paragraph::new(tick_text).alignment(Alignment::Right).style(bar_style), cols[1]);
 }
 
 fn draw_content_grid(f: &mut Frame, app: &App, area: Rect) {

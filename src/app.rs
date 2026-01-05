@@ -4,6 +4,7 @@ use crate::monitor::{SystemStats, ProcessInfo};
 
 pub struct App {
     pub should_quit: bool,
+    pub tick_ms: u64,
     
     // Charts History (Global)
     pub cpu_history_total: VecDeque<(f64, f64)>, 
@@ -38,6 +39,7 @@ impl App {
     pub fn new(max_history: usize) -> Self {
         Self {
             should_quit: false,
+            tick_ms: 2000,
             cpu_history_total: VecDeque::with_capacity(max_history),
             ram_history: VecDeque::with_capacity(max_history),
             net_rx_history: VecDeque::with_capacity(max_history),
@@ -174,25 +176,48 @@ impl App {
     
     // Special handling for arrow keys if they were passed as chars (not happening in main.rs currently)
     // We need to update main.rs to pass KeyCode enum or handle arrows there.
-    pub fn on_key_code(&mut self, code: crossterm::event::KeyCode) {
-        use crossterm::event::KeyCode;
-        match code {
+    pub fn on_key_event(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                self.should_quit = true;
+                return;
+            }
+        }
+        match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
                 if !self.processes.is_empty() {
                     self.process_scroll_state = (self.process_scroll_state + 1).min(self.processes.len().saturating_sub(1));
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
                 if self.process_scroll_state > 0 {
                     self.process_scroll_state -= 1;
                 }
             }
-            KeyCode::Char('s') => {
+            KeyCode::Char('s') | KeyCode::Char('S') => {
                 self.process_sort_by_cpu = !self.process_sort_by_cpu;
                 self.process_scroll_state = 0;
             }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.adjust_tick_ms(100);
+            }
+            KeyCode::Char('-') | KeyCode::Char('_') => {
+                self.adjust_tick_ms(-100);
+            }
+            KeyCode::Char('x') | KeyCode::Char('X') => {}
             _ => {}
         }
+    }
+
+    fn adjust_tick_ms(&mut self, delta: i64) {
+        const MIN_MS: i64 = 100;
+        const MAX_MS: i64 = 10_000;
+        let next = (self.tick_ms as i64 + delta).clamp(MIN_MS, MAX_MS);
+        self.tick_ms = next as u64;
     }
 }
