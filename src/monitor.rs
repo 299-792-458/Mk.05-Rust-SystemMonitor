@@ -1,5 +1,6 @@
 use std::thread;
 use std::time::{Duration, Instant};
+use std::process::Command;
 use crossbeam_channel::Sender;
 use sysinfo::{System, Networks, Disks, Components};
 
@@ -17,16 +18,12 @@ pub struct SystemStats {
     pub total_cpu_usage: f32,
     pub ram_used: u64,
     pub ram_total: u64,
-    pub swap_used: u64,
-    pub swap_total: u64,
-    pub rx_bytes: u64,
-    pub tx_bytes: u64,
     pub rx_speed: u64,
     pub tx_speed: u64,
+    pub net_max_bps: u64,
     pub temperatures: Vec<(String, f32)>,
     pub processes: Vec<ProcessInfo>,
     pub disks: Vec<(String, u64, u64)>,
-    pub timestamp: Instant,
     // NEW FIELDS
     pub uptime: u64,
     pub load_avg: (f64, f64, f64),
@@ -43,6 +40,7 @@ pub struct Monitor {
     disks: Disks,
     components: Components,
     target_interval: Duration,
+    net_max_bps: u64,
 }
 
 impl Monitor {
@@ -52,6 +50,7 @@ impl Monitor {
         let disks = Disks::new_with_refreshed_list();
         let components = Components::new_with_refreshed_list();
         sys.refresh_all();
+        let net_max_bps = get_net_max_bps(&networks);
         
         Self {
             tx,
@@ -60,6 +59,7 @@ impl Monitor {
             disks,
             components,
             target_interval: Duration::from_micros(1000), // 1ms
+            net_max_bps,
         }
     }
 
@@ -143,16 +143,12 @@ impl Monitor {
                     total_cpu_usage,
                     ram_used: self.sys.used_memory(),
                     ram_total: self.sys.total_memory(),
-                    swap_used: self.sys.used_swap(),
-                    swap_total: self.sys.total_swap(),
-                    rx_bytes: curr_rx,
-                    tx_bytes: curr_tx,
                     rx_speed,
                     tx_speed,
+                    net_max_bps: self.net_max_bps,
                     temperatures: temps,
                     processes: procs,
                     disks: disks_info,
-                    timestamp: now,
                     uptime: System::uptime(),
                     load_avg: (load.one, load.five, load.fifteen),
                 };
@@ -162,4 +158,63 @@ impl Monitor {
             }
         });
     }
+}
+
+#[cfg(target_os = "macos")]
+fn get_net_max_bps(networks: &Networks) -> u64 {
+    let mut max_mbps = 0_u64;
+    for (iface, _) in networks {
+        let output = Command::new("ifconfig").arg(iface).output();
+        let Ok(output) = output else { continue };
+        if !output.status.success() { continue; }
+        let text = String::from_utf8_lossy(&output.stdout);
+        if let Some(mbps) = parse_speed_mbps_from_ifconfig(&text) {
+            if mbps > max_mbps {
+                max_mbps = mbps;
+            }
+        }
+    }
+    if max_mbps == 0 { return 1_000_000 / 8; }
+    (max_mbps * 1_000_000) / 8
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_net_max_bps(_networks: &Networks) -> u64 {
+    1_000_000 / 8
+}
+
+#[cfg(target_os = "macos")]
+fn parse_speed_mbps_from_ifconfig(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        if !line.contains("media:") {
+            continue;
+        }
+        for token in line.split_whitespace() {
+            if let Some(pos) = token.find("base") {
+                let digits: String = token[..pos].chars().filter(|c| c.is_ascii_digit()).collect();
+                if let Ok(mbps) = digits.parse::<u64>() {
+                    return Some(mbps);
+                }
+            }
+            if let Some(mbps) = parse_unit_speed(token) {
+                return Some(mbps);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn parse_unit_speed(token: &str) -> Option<u64> {
+    if let Some(value) = token.strip_suffix("Gb/s") {
+        if let Ok(gbps) = value.parse::<u64>() {
+            return Some(gbps * 1000);
+        }
+    }
+    if let Some(value) = token.strip_suffix("Mb/s") {
+        if let Ok(mbps) = value.parse::<u64>() {
+            return Some(mbps);
+        }
+    }
+    None
 }

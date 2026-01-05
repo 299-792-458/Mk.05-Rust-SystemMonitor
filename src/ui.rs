@@ -4,11 +4,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         canvas::{Canvas, Rectangle},
-        Axis, Block, Borders, BorderType, Chart, Dataset, Gauge, 
-        GraphType, Paragraph, Row, Table, TableState
+        Block, Borders, BorderType, Gauge, Paragraph, Row, Table, TableState
     },
     Frame,
-    symbols,
 };
 use crate::app::App;
 
@@ -16,7 +14,6 @@ use crate::app::App;
 const C_BG: Color = Color::Rgb(15, 17, 26);         // Deep Night Blue
 const C_PANEL_BG: Color = Color::Rgb(15, 17, 26);
 const C_BORDER: Color = Color::Rgb(80, 80, 100);    // Steel Grey
-const C_BORDER_FOCUS: Color = Color::Rgb(0, 200, 255);
 
 const C_ACCENT_MAIN: Color = Color::Rgb(0, 255, 255); // Cyan
 const C_ACCENT_SEC: Color = Color::Rgb(180, 0, 255);  // Purple
@@ -24,13 +21,6 @@ const C_ACCENT_WARN: Color = Color::Rgb(255, 180, 0); // Amber
 const C_ACCENT_CRIT: Color = Color::Rgb(255, 50, 80); // Red
 const C_TEXT_DIM: Color = Color::Rgb(120, 130, 150);
 const C_TEXT_LITE: Color = Color::Rgb(220, 230, 240);
-
-// --- HELPER ---
-fn format_speed(bytes: f64) -> String {
-    if bytes < 1024.0 { format!("{:.0} B", bytes) }
-    else if bytes < 1024.0 * 1024.0 { format!("{:.1} K", bytes / 1024.0) }
-    else { format!("{:.1} M", bytes / 1024.0 / 1024.0) }
-}
 
 fn block_pro(title: &str, border_color: Color) -> Block {
     Block::default()
@@ -42,7 +32,7 @@ fn block_pro(title: &str, border_color: Color) -> Block {
         .style(Style::default().bg(C_PANEL_BG))
 }
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     // Global Background
     f.render_widget(Block::default().style(Style::default().bg(C_BG)), f.area());
 
@@ -65,11 +55,15 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let h = uptime / 3600;
     let m = (uptime % 3600) / 60;
     
-    let text = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" ⚡ OMNI-MONITOR ", Style::default().fg(C_ACCENT_MAIN).add_modifier(Modifier::BOLD)),
         Span::styled(format!("| HOST: {} | UPTIME: {:02}h {:02}m ", hostname.to_uppercase(), h, m), Style::default().fg(C_TEXT_DIM)),
-        Span::styled(" | [Q] Quit [S] Sort [+/-] Tick", Style::default().fg(C_ACCENT_WARN)),
-    ]);
+        Span::styled(" | [/] Search [X] Kill [S] Sort [+/-] Tick", Style::default().fg(C_ACCENT_WARN)),
+    ];
+    if app.kill_pending {
+        spans.push(Span::styled(" | CONFIRM KILL? [Y/N]", Style::default().fg(C_ACCENT_CRIT).add_modifier(Modifier::BOLD)));
+    }
+    let text = Line::from(spans);
     let tick_label = format!("TICK {}ms", app.tick_ms);
     let tick_text = Line::from(Span::styled(tick_label, Style::default().fg(C_TEXT_LITE)));
 
@@ -83,7 +77,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(tick_text).alignment(Alignment::Right).style(bar_style), cols[1]);
 }
 
-fn draw_content_grid(f: &mut Frame, app: &App, area: Rect) {
+fn draw_content_grid(f: &mut Frame, app: &mut App, area: Rect) {
     // Sidebar (Processes) vs Dashboard
     let main_cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -97,10 +91,33 @@ fn draw_content_grid(f: &mut Frame, app: &App, area: Rect) {
     draw_dashboard(f, app, main_cols[1]);
 }
 
-fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
+fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let block = block_pro("ACTIVE TASKS", C_BORDER);
     let inner = block.inner(area);
     f.render_widget(block, area);
+
+    let sidebar_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+        .split(inner);
+    let search_area = sidebar_rows[0];
+    app.set_search_bar_area(search_area);
+
+    let search_title = if app.search_active { "SEARCH (TYPE)" } else { "SEARCH" };
+    let search_text = if app.search_query.is_empty() {
+        "Type to filter by name or PID"
+    } else {
+        app.search_query.as_str()
+    };
+    let search_style = if app.search_active {
+        Style::default().fg(C_ACCENT_MAIN)
+    } else {
+        Style::default().fg(C_TEXT_DIM)
+    };
+    let search_box = Paragraph::new(search_text)
+        .block(Block::default().borders(Borders::ALL).border_style(search_style).title(search_title))
+        .style(Style::default().fg(C_TEXT_LITE));
+    f.render_widget(search_box, search_area);
 
     // Header
     let (cpu_c, mem_c) = if app.process_sort_by_cpu { (C_ACCENT_MAIN, C_TEXT_DIM) } else { (C_TEXT_DIM, C_ACCENT_SEC) };
@@ -113,7 +130,8 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let header = Row::new(header_cells).height(1).bottom_margin(1);
 
     // Rows
-    let rows = app.processes.iter().take(40).enumerate().map(|(i, p)| {
+    let filtered = app.filtered_processes();
+    let rows = filtered.iter().take(40).enumerate().map(|(i, p)| {
         let style = if i % 2 == 0 { Style::default().bg(Color::Rgb(20, 22, 35)) } else { Style::default() };
         let cells = vec![
             ratatui::widgets::Cell::from(p.pid.to_string()).style(Style::default().fg(C_TEXT_DIM)),
@@ -133,7 +151,13 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
 
     let mut state = TableState::default();
     state.select(Some(app.process_scroll_state));
-    f.render_stateful_widget(table.highlight_style(Style::default().bg(C_BORDER).add_modifier(Modifier::BOLD)), inner, &mut state);
+    let selected = if filtered.is_empty() { None } else { Some(app.process_scroll_state) };
+    state.select(selected);
+    f.render_stateful_widget(
+        table.row_highlight_style(Style::default().bg(C_BORDER).add_modifier(Modifier::BOLD)),
+        sidebar_rows[1],
+        &mut state,
+    );
 }
 
 fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
@@ -176,27 +200,14 @@ fn draw_cpu_section(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    draw_chart(f, &app.cpu_history_total, C_ACCENT_MAIN, inner, 0.0, 100.0);
+    draw_chart_dots(f, &app.cpu_history_total, C_ACCENT_MAIN, inner, 0.0, 100.0, app.max_history_len);
 }
 
 fn draw_mem_section(f: &mut Frame, app: &App, area: Rect) {
     let block = block_pro("MEMORY", C_ACCENT_SEC);
     let inner = block.inner(area);
     f.render_widget(block, area);
-
-    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(80), Constraint::Percentage(20)]).split(inner);
-    
-    draw_chart(f, &app.ram_history, C_ACCENT_SEC, chunks[0], 0.0, 100.0);
-    
-    // Swap Tiny Gauge
-    if let Some(stats) = &app.last_stats {
-        let ratio = if stats.swap_total > 0 { stats.swap_used as f64 / stats.swap_total as f64 } else { 0.0 };
-        let gauge = Gauge::default()
-            .gauge_style(Style::default().fg(Color::DarkGray).bg(C_PANEL_BG))
-            .ratio(ratio)
-            .label(format!("SWP {:.0}%", ratio * 100.0));
-        f.render_widget(gauge, chunks[1]);
-    }
+    draw_chart_dots(f, &app.ram_history, C_ACCENT_SEC, inner, 0.0, 100.0, app.max_history_len);
 }
 
 fn draw_net_section(f: &mut Frame, app: &App, area: Rect) {
@@ -206,17 +217,24 @@ fn draw_net_section(f: &mut Frame, app: &App, area: Rect) {
 
     let rx: Vec<(f64, f64)> = app.net_rx_history.iter().cloned().collect();
     let tx: Vec<(f64, f64)> = app.net_tx_history.iter().cloned().collect();
-    let max = rx.iter().chain(tx.iter()).map(|(_,v)| *v).fold(0.0, f64::max).max(1024.0);
+    let max = app
+        .last_stats
+        .as_ref()
+        .map(|s| s.net_max_bps as f64)
+        .unwrap_or(0.0)
+        .max(1024.0);
 
-    let datasets = vec![
-        Dataset::default().name("RX").marker(symbols::Marker::Braille).graph_type(GraphType::Line).style(Style::default().fg(Color::Green)).data(&rx),
-        Dataset::default().name("TX").marker(symbols::Marker::Braille).graph_type(GraphType::Line).style(Style::default().fg(Color::Red)).data(&tx),
-    ];
-    
-    let chart = Chart::new(datasets)
-        .x_axis(Axis::default().bounds([get_x(&rx).0, get_x(&rx).1]))
-        .y_axis(Axis::default().bounds([0.0, max]).labels(vec![Span::raw("0"), Span::raw("MAX")]));
-    f.render_widget(chart, inner);
+    draw_dot_canvas_dual(
+        f,
+        &rx,
+        &tx,
+        inner,
+        0.0,
+        max,
+        Color::Green,
+        Color::Red,
+        app.max_history_len,
+    );
 }
 
 fn draw_heatmap_section(f: &mut Frame, app: &App, area: Rect) {
@@ -261,7 +279,7 @@ fn draw_info_section(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
 
     // Temp Chart
-    draw_chart(f, &app.temp_history, C_ACCENT_CRIT, chunks[0], 0.0, 100.0);
+    draw_chart_dots(f, &app.temp_history, C_ACCENT_CRIT, chunks[0], 0.0, 100.0, app.max_history_len);
 
     // Disk Gauges
     let disk_constraints = vec![Constraint::Length(1); app.disks.len().min(3)];
@@ -278,21 +296,122 @@ fn draw_info_section(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_chart(f: &mut Frame, data: &std::collections::VecDeque<(f64, f64)>, color: Color, area: Rect, min: f64, max: f64) {
+fn draw_chart_dots(
+    f: &mut Frame,
+    data: &std::collections::VecDeque<(f64, f64)>,
+    color: Color,
+    area: Rect,
+    min: f64,
+    max: f64,
+    max_points: usize,
+) {
     let vec_data: Vec<(f64, f64)> = data.iter().cloned().collect();
-    let (x_min, x_max) = get_x(&vec_data);
-
-    let datasets = vec![
-        Dataset::default().marker(symbols::Marker::Braille).graph_type(GraphType::Line).style(Style::default().fg(color)).data(&vec_data),
-    ];
-    let chart = Chart::new(datasets)
-        .x_axis(Axis::default().bounds([x_min, x_max]))
-        .y_axis(Axis::default().bounds([min, max]).labels(vec![Span::raw(format!("{:.0}", min)), Span::raw(format!("{:.0}", max))]));
-    f.render_widget(chart, area);
+    draw_dot_canvas_single(f, &vec_data, area, min, max, color, max_points);
 }
 
-fn get_x(data: &[(f64, f64)]) -> (f64, f64) {
-    let x_min = data.first().map(|x| x.0).unwrap_or(0.0);
-    let x_max = data.last().map(|x| x.0).unwrap_or(0.0).max(x_min + 10.0);
-    (x_min, x_max)
+fn draw_dot_canvas_single(
+    f: &mut Frame,
+    data: &[(f64, f64)],
+    area: Rect,
+    min: f64,
+    max: f64,
+    color: Color,
+    max_points: usize,
+) {
+    const DOT_STEP: f64 = 4.0;
+    let max_points_f = max_points.max(1) as f64;
+    let len = data.len() as f64;
+    let step = 1.0 / max_points_f;
+    let start_x = (max_points_f - len).max(0.0);
+    let canvas = Canvas::default()
+        .x_bounds([0.0, 1.0])
+        .y_bounds([min, max.max(1.0)])
+        .paint(|ctx| {
+            for (i, (_, v)) in data.iter().enumerate() {
+                let x = (start_x + i as f64) * step + (step * 0.5);
+                let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
+                let shade = scale_color(color, ratio);
+                let mut y = min;
+                while y <= *v {
+                    ctx.draw(&Rectangle {
+                        x,
+                        y,
+                        width: (step * 0.6).max(0.01),
+                        height: 1.0,
+                        color: shade,
+                    });
+                    y += DOT_STEP;
+                }
+            }
+        });
+    f.render_widget(canvas, area);
+}
+
+fn draw_dot_canvas_dual(
+    f: &mut Frame,
+    left: &[(f64, f64)],
+    right: &[(f64, f64)],
+    area: Rect,
+    min: f64,
+    max: f64,
+    left_color: Color,
+    right_color: Color,
+    max_points: usize,
+) {
+    const DOT_STEP: f64 = 4.0;
+    let len = left.len().max(right.len()) as f64;
+    let max_points_f = max_points.max(1) as f64;
+    let step = 1.0 / max_points_f;
+    let start_x = (max_points_f - len).max(0.0);
+    let canvas = Canvas::default()
+        .x_bounds([0.0, 1.0])
+        .y_bounds([min, max.max(1.0)])
+        .paint(|ctx| {
+            for (i, (_, v)) in left.iter().enumerate() {
+                let x = (start_x + i as f64) * step + (step * 0.35);
+                let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
+                let shade = scale_color(left_color, ratio);
+                let mut y = min;
+                while y <= *v {
+                    ctx.draw(&Rectangle {
+                        x,
+                        y,
+                        width: (step * 0.3).max(0.01),
+                        height: 1.0,
+                        color: shade,
+                    });
+                    y += DOT_STEP;
+                }
+            }
+            for (i, (_, v)) in right.iter().enumerate() {
+                let x = (start_x + i as f64) * step + (step * 0.7);
+                let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
+                let shade = scale_color(right_color, ratio);
+                let mut y = min;
+                while y <= *v {
+                    ctx.draw(&Rectangle {
+                        x,
+                        y,
+                        width: (step * 0.3).max(0.01),
+                        height: 1.0,
+                        color: shade,
+                    });
+                    y += DOT_STEP;
+                }
+            }
+        });
+    f.render_widget(canvas, area);
+}
+
+fn scale_color(color: Color, ratio: f64) -> Color {
+    let ratio = ratio.clamp(0.35, 1.0);
+    match color {
+        Color::Rgb(r, g, b) => {
+            let rf = (r as f64 * ratio).min(255.0) as u8;
+            let gf = (g as f64 * ratio).min(255.0) as u8;
+            let bf = (b as f64 * ratio).min(255.0) as u8;
+            Color::Rgb(rf, gf, bf)
+        }
+        _ => color,
+    }
 }

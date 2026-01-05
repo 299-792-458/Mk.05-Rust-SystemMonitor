@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use crate::monitor::{SystemStats, ProcessInfo};
+use ratatui::layout::Rect;
+use sysinfo::{Pid, ProcessesToUpdate, System};
+use crate::monitor::{ProcessInfo, SystemStats};
 
 pub struct App {
     pub should_quit: bool,
@@ -29,11 +31,15 @@ pub struct App {
     // Interaction
     pub process_scroll_state: usize, // Selected row index
     pub process_sort_by_cpu: bool,   // Toggle sort mode
+    pub search_query: String,
+    pub search_active: bool,
+    pub search_bar_area: Option<Rect>,
+    pub kill_pending: bool,
 }
 
 impl App {
     pub fn new(max_history: usize) -> Self {
-        Self {
+        let mut app = Self {
             should_quit: false,
             tick_ms: 2000,
             cpu_history_total: VecDeque::with_capacity(max_history),
@@ -52,7 +58,13 @@ impl App {
 
             process_scroll_state: 0,
             process_sort_by_cpu: true,
-        }
+            search_query: String::new(),
+            search_active: false,
+            search_bar_area: None,
+            kill_pending: false,
+        };
+        app.recompute_history_len();
+        app
     }
 
     pub fn on_tick(&mut self, stats: SystemStats) {
@@ -68,6 +80,7 @@ impl App {
             procs.sort_by(|a, b| b.mem.cmp(&a.mem));
         }
         self.processes = procs;
+        self.clamp_process_selection();
         self.last_stats = Some(stats.clone());
 
         self.update_charts(&stats);
@@ -107,32 +120,6 @@ impl App {
         self.temp_history.push_back((self.chart_tick_count, max_temp as f64));
     }
 
-    pub fn on_key(&mut self, c: char) {
-        match c {
-            'q' | 'Q' => self.should_quit = true,
-            'j' | 'J' => { // Down
-                if !self.processes.is_empty() {
-                    self.process_scroll_state = (self.process_scroll_state + 1).min(self.processes.len() - 1);
-                }
-            }
-            'k' | 'K' => { // Up (or Kill? Let's use K for up and x for kill to be safer, or just K for up context)
-                // Vim style navigation
-                if self.process_scroll_state > 0 {
-                    self.process_scroll_state -= 1;
-                }
-            }
-            's' | 'S' => { // Sort Toggle
-                self.process_sort_by_cpu = !self.process_sort_by_cpu;
-                self.process_scroll_state = 0; // Reset scroll
-            }
-            'x' | 'X' => { // Kill Process
-                // Real kill logic would go here. For safety in demo, we just print or log.
-                // In real app: sys.process(pid).kill();
-            }
-            _ => {}
-        }
-    }
-    
     // Special handling for arrow keys if they were passed as chars (not happening in main.rs currently)
     // We need to update main.rs to pass KeyCode enum or handle arrows there.
     pub fn on_key_event(&mut self, key: crossterm::event::KeyEvent) {
@@ -145,6 +132,38 @@ impl App {
                 self.should_quit = true;
                 return;
             }
+        }
+        if self.search_active {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.search_active = false;
+                }
+                KeyCode::Backspace => {
+                    self.search_query.pop();
+                    self.process_scroll_state = 0;
+                }
+                KeyCode::Char(c) => {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                        self.search_query.push(c);
+                        self.process_scroll_state = 0;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.kill_pending {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    self.kill_selected_process();
+                    self.kill_pending = false;
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.kill_pending = false;
+                }
+                _ => {}
+            }
+            return;
         }
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
@@ -162,14 +181,73 @@ impl App {
                 self.process_sort_by_cpu = !self.process_sort_by_cpu;
                 self.process_scroll_state = 0;
             }
+            KeyCode::Char('/') => {
+                self.search_active = true;
+                self.process_scroll_state = 0;
+            }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 self.adjust_tick_ms(100);
             }
             KeyCode::Char('-') | KeyCode::Char('_') => {
                 self.adjust_tick_ms(-100);
             }
-            KeyCode::Char('x') | KeyCode::Char('X') => {}
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                self.kill_pending = true;
+            }
             _ => {}
+        }
+    }
+
+    pub fn on_mouse_event(&mut self, mouse: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            if let Some(area) = self.search_bar_area {
+                let inside_x = mouse.column >= area.x && mouse.column < area.x.saturating_add(area.width);
+                let inside_y = mouse.row >= area.y && mouse.row < area.y.saturating_add(area.height);
+                if inside_x && inside_y {
+                    self.search_active = true;
+                    return;
+                }
+            }
+            self.search_active = false;
+        }
+    }
+
+    pub fn set_search_bar_area(&mut self, area: Rect) {
+        self.search_bar_area = Some(area);
+    }
+
+    pub fn filtered_processes(&self) -> Vec<&ProcessInfo> {
+        let query = self.search_query.trim().to_lowercase();
+        if query.is_empty() {
+            return self.processes.iter().collect();
+        }
+        self.processes
+            .iter()
+            .filter(|p| {
+                p.name.to_lowercase().contains(&query) || p.pid.to_string().contains(&query)
+            })
+            .collect()
+    }
+
+    pub fn clamp_process_selection(&mut self) {
+        let len = self.filtered_processes().len();
+        if len == 0 {
+            self.process_scroll_state = 0;
+            return;
+        }
+        if self.process_scroll_state >= len {
+            self.process_scroll_state = len - 1;
+        }
+    }
+
+    fn kill_selected_process(&self) {
+        let filtered = self.filtered_processes();
+        let Some(proc) = filtered.get(self.process_scroll_state) else { return };
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        if let Some(process) = sys.process(Pid::from_u32(proc.pid)) {
+            let _ = process.kill();
         }
     }
 
@@ -182,9 +260,9 @@ impl App {
     }
 
     fn recompute_history_len(&mut self) {
-        const HISTORY_WINDOW_MS: u64 = 60_000;
-        let len = (HISTORY_WINDOW_MS / self.tick_ms).max(10) as usize;
-        self.max_history_len = len;
+        // Keep charts dense like the core matrix by using a fixed point count.
+        const HISTORY_POINTS: usize = 100;
+        self.max_history_len = HISTORY_POINTS;
         self.trim_histories();
     }
 

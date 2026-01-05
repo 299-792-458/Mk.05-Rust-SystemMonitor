@@ -24,8 +24,8 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // 2. Setup App & Monitor
-    // History length for sparklines (e.g., last 200 ticks)
-    let app = App::new(200); 
+    // History length for charts (dense points similar to the core matrix)
+    let app = App::new(100);
     let (tx, rx) = unbounded();
     
     // Start Monitor Thread
@@ -62,7 +62,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
     loop {
         // 1. Draw UI
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         // 2. Handle Input (with timeout for tick rate)
         let timeout = tick_rate
@@ -70,8 +70,10 @@ fn run_app<B: ratatui::backend::Backend>(
             .unwrap_or_else(|| Duration::from_secs(0));
             
         if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                app.on_key_event(key);
+            match event::read()? {
+                Event::Key(key) => app.on_key_event(key),
+                Event::Mouse(mouse) => app.on_mouse_event(mouse),
+                _ => {}
             }
         }
 
