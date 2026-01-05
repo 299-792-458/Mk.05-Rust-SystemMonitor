@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::time::Instant;
 use crate::monitor::{SystemStats, ProcessInfo};
 
 pub struct App {
@@ -25,9 +24,6 @@ pub struct App {
 
     pub max_history_len: usize,
     
-    // Aggregation
-    accumulated_stats: Vec<SystemStats>,
-    last_chart_update: Instant,
     pub chart_tick_count: f64,
 
     // Interaction
@@ -52,8 +48,6 @@ impl App {
             last_stats: None,
             max_history_len: max_history,
             
-            accumulated_stats: Vec::with_capacity(1000),
-            last_chart_update: Instant::now(),
             chart_tick_count: 0.0,
 
             process_scroll_state: 0,
@@ -76,76 +70,41 @@ impl App {
         self.processes = procs;
         self.last_stats = Some(stats.clone());
 
-        // 2. Heatmap Update (Every tick or throttled?)
-        // Let's update heatmap every tick for "flow" visual, or every chart update?
-        // Updating every 1ms is too fast for visual, let's do it with chart update (1s) or faster (e.g. 100ms)?
-        // For visual smoothness, 1s is choppy. Let's do it every ~100ms if possible.
-        // For now, let's sync with Chart Update (1s) to match the other graphs.
-        // OR better: Update accumulation logic.
-
-        self.accumulated_stats.push(stats);
-
-        if self.last_chart_update.elapsed().as_secs_f64() >= 0.1 { // 10 FPS updates for smoother visuals
-            self.update_charts();
-            self.last_chart_update = Instant::now();
-        }
+        self.update_charts(&stats);
     }
 
-    fn update_charts(&mut self) {
-        if self.accumulated_stats.is_empty() { return; }
-
+    fn update_charts(&mut self, stats: &SystemStats) {
         self.chart_tick_count += 1.0;
-        let count = self.accumulated_stats.len() as f32;
+        let core_count = stats.cpu_usage.len();
+        if self.cpu_core_history.len() != core_count {
+            self.cpu_core_history = vec![VecDeque::with_capacity(100); core_count]; // 100 cols wide
+        }
 
-        // Averages
-        let avg_cpu: f32 = self.accumulated_stats.iter().map(|s| s.total_cpu_usage).sum::<f32>() / count;
-        
-        // --- Heatmap Logic ---
-        // We need average per core.
-        // Assuming all stats have same number of cores.
-        if let Some(first) = self.accumulated_stats.first() {
-            let core_count = first.cpu_usage.len();
-            if self.cpu_core_history.len() != core_count {
-                self.cpu_core_history = vec![VecDeque::with_capacity(100); core_count]; // 100 cols wide
+        for i in 0..core_count {
+            if self.cpu_core_history[i].len() >= 100 { // Heatmap width
+                self.cpu_core_history[i].pop_front();
             }
-
-            for i in 0..core_count {
-                let core_sum: f32 = self.accumulated_stats.iter().map(|s| s.cpu_usage.get(i).cloned().unwrap_or(0.0)).sum();
-                let core_avg = core_sum / count;
-                
-                if self.cpu_core_history[i].len() >= 100 { // Heatmap width
-                    self.cpu_core_history[i].pop_front();
-                }
-                self.cpu_core_history[i].push_back(core_avg as u8);
-            }
+            self.cpu_core_history[i].push_back(stats.cpu_usage.get(i).cloned().unwrap_or(0.0) as u8);
         }
 
         // Global Charts
         if self.cpu_history_total.len() >= self.max_history_len { self.cpu_history_total.pop_front(); }
-        self.cpu_history_total.push_back((self.chart_tick_count, avg_cpu as f64));
+        self.cpu_history_total.push_back((self.chart_tick_count, stats.total_cpu_usage as f64));
         
         // RAM
-        let avg_ram: f64 = self.accumulated_stats.iter().map(|s| s.ram_used as f64).sum::<f64>() / count as f64;
-        let total = self.accumulated_stats[0].ram_total as f64;
+        let total = stats.ram_total as f64;
         if self.ram_history.len() >= self.max_history_len { self.ram_history.pop_front(); }
-        self.ram_history.push_back((self.chart_tick_count, (avg_ram / total) * 100.0));
+        self.ram_history.push_back((self.chart_tick_count, (stats.ram_used as f64 / total) * 100.0));
 
         // Net
-        let avg_rx: f64 = self.accumulated_stats.iter().map(|s| s.rx_speed as f64).sum::<f64>() / count as f64;
-        let avg_tx: f64 = self.accumulated_stats.iter().map(|s| s.tx_speed as f64).sum::<f64>() / count as f64;
         if self.net_rx_history.len() >= self.max_history_len { self.net_rx_history.pop_front(); self.net_tx_history.pop_front(); }
-        self.net_rx_history.push_back((self.chart_tick_count, avg_rx));
-        self.net_tx_history.push_back((self.chart_tick_count, avg_tx));
+        self.net_rx_history.push_back((self.chart_tick_count, stats.rx_speed as f64));
+        self.net_tx_history.push_back((self.chart_tick_count, stats.tx_speed as f64));
 
         // Temp (Max observed in this interval)
-        let max_temp = self.accumulated_stats.iter()
-            .flat_map(|s| s.temperatures.iter().map(|(_, t)| *t))
-            .fold(0.0_f32, f32::max);
-            
         if self.temp_history.len() >= self.max_history_len { self.temp_history.pop_front(); }
+        let max_temp = stats.temperatures.iter().map(|(_, t)| *t).fold(0.0_f32, f32::max);
         self.temp_history.push_back((self.chart_tick_count, max_temp as f64));
-
-        self.accumulated_stats.clear();
     }
 
     pub fn on_key(&mut self, c: char) {
@@ -219,5 +178,21 @@ impl App {
         const MAX_MS: i64 = 10_000;
         let next = (self.tick_ms as i64 + delta).clamp(MIN_MS, MAX_MS);
         self.tick_ms = next as u64;
+        self.recompute_history_len();
+    }
+
+    fn recompute_history_len(&mut self) {
+        const HISTORY_WINDOW_MS: u64 = 60_000;
+        let len = (HISTORY_WINDOW_MS / self.tick_ms).max(10) as usize;
+        self.max_history_len = len;
+        self.trim_histories();
+    }
+
+    fn trim_histories(&mut self) {
+        while self.cpu_history_total.len() > self.max_history_len { self.cpu_history_total.pop_front(); }
+        while self.ram_history.len() > self.max_history_len { self.ram_history.pop_front(); }
+        while self.net_rx_history.len() > self.max_history_len { self.net_rx_history.pop_front(); }
+        while self.net_tx_history.len() > self.max_history_len { self.net_tx_history.pop_front(); }
+        while self.temp_history.len() > self.max_history_len { self.temp_history.pop_front(); }
     }
 }
