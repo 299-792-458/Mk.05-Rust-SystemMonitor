@@ -51,7 +51,6 @@ impl Monitor {
         let components = Components::new_with_refreshed_list();
         sys.refresh_all();
         let net_max_bps = get_net_max_bps(&networks);
-        
         Self {
             tx,
             sys,
@@ -218,3 +217,5 @@ fn parse_unit_speed(token: &str) -> Option<u64> {
     }
     None
 }
+
+// net_max_bps helper removed; network chart now scales to recent history.

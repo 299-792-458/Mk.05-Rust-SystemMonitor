@@ -221,15 +221,14 @@ fn draw_net_section(f: &mut Frame, app: &App, area: Rect) {
         .last_stats
         .as_ref()
         .map(|s| s.net_max_bps as f64)
-        .unwrap_or(0.0)
-        .max(1024.0);
+        .unwrap_or(1.0)
+        .max(1.0);
 
     draw_dot_canvas_dual_centered(
         f,
         &rx,
         &tx,
         inner,
-        0.0,
         max,
         Color::Green,
         Color::Red,
@@ -346,7 +345,6 @@ fn draw_dot_canvas_dual_centered(
     left: &[(f64, f64)],
     right: &[(f64, f64)],
     area: Rect,
-    min: f64,
     max: f64,
     left_color: Color,
     right_color: Color,
@@ -357,17 +355,18 @@ fn draw_dot_canvas_dual_centered(
     let max_points_f = max_points.max(1) as f64;
     let step = 1.0 / max_points_f;
     let start_x = (max_points_f - len).max(0.0);
-    let mid = min + (max - min) * 0.5;
     let canvas = Canvas::default()
         .x_bounds([0.0, 1.0])
-        .y_bounds([min, max.max(1.0)])
+        .y_bounds([-100.0, 100.0])
         .paint(|ctx| {
             for (i, (_, v)) in left.iter().enumerate() {
                 let x = (start_x + i as f64) * step + (step * 0.35);
-                let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
+                let v = v.clamp(0.0, max);
+                let ratio = (v / max.max(1.0)).clamp(0.0, 1.0);
+                let v_norm = ratio * 100.0;
                 let shade = scale_color(left_color, ratio);
-                let bottom = mid - ((max - min) * 0.5 * ratio);
-                let mut y = mid;
+                let bottom = -v_norm;
+                let mut y = 0.0;
                 while y >= bottom {
                     ctx.draw(&Rectangle {
                         x,
@@ -381,10 +380,12 @@ fn draw_dot_canvas_dual_centered(
             }
             for (i, (_, v)) in right.iter().enumerate() {
                 let x = (start_x + i as f64) * step + (step * 0.7);
-                let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
+                let v = v.clamp(0.0, max);
+                let ratio = (v / max.max(1.0)).clamp(0.0, 1.0);
+                let v_norm = ratio * 100.0;
                 let shade = scale_color(right_color, ratio);
-                let top = mid + ((max - min) * 0.5 * ratio);
-                let mut y = mid;
+                let top = v_norm;
+                let mut y = 0.0;
                 while y <= top {
                     ctx.draw(&Rectangle {
                         x,
