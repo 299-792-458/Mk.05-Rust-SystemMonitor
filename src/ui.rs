@@ -4,7 +4,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         canvas::{Canvas, Rectangle},
-        Block, Borders, BorderType, Gauge, Paragraph, Row, Table, TableState
+        Block, Borders, BorderType, Paragraph, Row, Table, TableState
     },
     Frame,
 };
@@ -56,7 +56,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let m = (uptime % 3600) / 60;
     
     let mut spans = vec![
-        Span::styled(" ⚡ OMNI-MONITOR ", Style::default().fg(C_ACCENT_MAIN).add_modifier(Modifier::BOLD)),
+        Span::styled(" OMNI-MONITOR ", Style::default().fg(C_ACCENT_MAIN).add_modifier(Modifier::BOLD)),
         Span::styled(format!("| HOST: {} | UPTIME: {:02}h {:02}m ", hostname.to_uppercase(), h, m), Style::default().fg(C_TEXT_DIM)),
         Span::styled(" | [/] Search [X] Kill [S] Sort [+/-] Tick", Style::default().fg(C_ACCENT_WARN)),
     ];
@@ -224,7 +224,7 @@ fn draw_net_section(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or(0.0)
         .max(1024.0);
 
-    draw_dot_canvas_dual(
+    draw_dot_canvas_dual_centered(
         f,
         &rx,
         &tx,
@@ -272,28 +272,22 @@ fn draw_heatmap_section(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_info_section(f: &mut Frame, app: &App, area: Rect) {
-    let block = block_pro("SYSTEM STATUS", C_TEXT_DIM);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
 
     // Temp Chart
-    draw_chart_dots(f, &app.temp_history, C_ACCENT_CRIT, chunks[0], 0.0, 100.0, app.max_history_len);
+    let temp_block = block_pro("TEMPERATURE", C_ACCENT_CRIT);
+    let temp_inner = temp_block.inner(chunks[0]);
+    f.render_widget(temp_block, chunks[0]);
+    draw_chart_dots(f, &app.temp_history, C_ACCENT_CRIT, temp_inner, 0.0, 100.0, app.max_history_len);
 
-    // Disk Gauges
-    let disk_constraints = vec![Constraint::Length(1); app.disks.len().min(3)];
-    let disk_layout = Layout::default().direction(Direction::Vertical).constraints(disk_constraints).split(chunks[1]);
-    for (i, (name, used, total)) in app.disks.iter().take(3).enumerate() {
-        if i >= disk_layout.len() { break; }
-        let ratio = *used as f64 / *total as f64;
-        let color = if ratio > 0.8 { C_ACCENT_CRIT } else { C_ACCENT_MAIN };
-        let gauge = Gauge::default()
-            .gauge_style(Style::default().fg(color).bg(C_BG))
-            .ratio(ratio)
-            .label(format!("{} {:.0}%", name, ratio * 100.0));
-        f.render_widget(gauge, disk_layout[i]);
-    }
+    // Disk Usage Chart
+    let disk_block = block_pro("DISK USAGE", C_ACCENT_MAIN);
+    let disk_inner = disk_block.inner(chunks[1]);
+    f.render_widget(disk_block, chunks[1]);
+    draw_disk_usage_dots(f, &app.disks, disk_inner);
 }
 
 fn draw_chart_dots(
@@ -347,7 +341,7 @@ fn draw_dot_canvas_single(
     f.render_widget(canvas, area);
 }
 
-fn draw_dot_canvas_dual(
+fn draw_dot_canvas_dual_centered(
     f: &mut Frame,
     left: &[(f64, f64)],
     right: &[(f64, f64)],
@@ -363,6 +357,7 @@ fn draw_dot_canvas_dual(
     let max_points_f = max_points.max(1) as f64;
     let step = 1.0 / max_points_f;
     let start_x = (max_points_f - len).max(0.0);
+    let mid = min + (max - min) * 0.5;
     let canvas = Canvas::default()
         .x_bounds([0.0, 1.0])
         .y_bounds([min, max.max(1.0)])
@@ -371,8 +366,26 @@ fn draw_dot_canvas_dual(
                 let x = (start_x + i as f64) * step + (step * 0.35);
                 let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
                 let shade = scale_color(left_color, ratio);
-                let mut y = min;
-                while y <= *v {
+                let bottom = mid - ((max - min) * 0.5 * ratio);
+                let mut y = mid;
+                while y >= bottom {
+                    ctx.draw(&Rectangle {
+                        x,
+                        y,
+                        width: (step * 0.3).max(0.01),
+                        height: 1.0,
+                        color: shade,
+                    });
+                    y -= DOT_STEP;
+                }
+            }
+            for (i, (_, v)) in right.iter().enumerate() {
+                let x = (start_x + i as f64) * step + (step * 0.7);
+                let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
+                let shade = scale_color(right_color, ratio);
+                let top = mid + ((max - min) * 0.5 * ratio);
+                let mut y = mid;
+                while y <= top {
                     ctx.draw(&Rectangle {
                         x,
                         y,
@@ -383,16 +396,30 @@ fn draw_dot_canvas_dual(
                     y += DOT_STEP;
                 }
             }
-            for (i, (_, v)) in right.iter().enumerate() {
-                let x = (start_x + i as f64) * step + (step * 0.7);
-                let ratio = ((*v - min) / (max - min).max(1.0)).clamp(0.0, 1.0);
-                let shade = scale_color(right_color, ratio);
-                let mut y = min;
-                while y <= *v {
+        });
+    f.render_widget(canvas, area);
+}
+
+fn draw_disk_usage_dots(f: &mut Frame, disks: &[(String, u64, u64)], area: Rect) {
+    const DOT_STEP: f64 = 4.0;
+    let count = disks.len().min(3).max(1) as f64;
+    let step = 1.0 / count;
+    let canvas = Canvas::default()
+        .x_bounds([0.0, 1.0])
+        .y_bounds([0.0, 100.0])
+        .paint(|ctx| {
+            for (i, (_name, used, total)) in disks.iter().take(3).enumerate() {
+                let ratio = if *total > 0 { *used as f64 / *total as f64 } else { 0.0 };
+                let pct = (ratio * 100.0).clamp(0.0, 100.0);
+                let base_color = if ratio > 0.8 { C_ACCENT_CRIT } else { C_ACCENT_MAIN };
+                let shade = scale_color(base_color, ratio);
+                let x = (i as f64 + 0.5) * step;
+                let mut y = 0.0;
+                while y <= pct {
                     ctx.draw(&Rectangle {
                         x,
                         y,
-                        width: (step * 0.3).max(0.01),
+                        width: (step * 0.4).max(0.02),
                         height: 1.0,
                         color: shade,
                     });
